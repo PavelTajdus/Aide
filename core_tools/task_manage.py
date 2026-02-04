@@ -83,6 +83,8 @@ def update_task(workspace, args) -> None:
         found = False
         for task in tasks:
             if task.get("id") == args.id:
+                if args.remind is not None:
+                    task.pop("remind_sent_at", None)
                 for field in ("title", "project", "status", "priority", "context", "due", "remind", "recurrence"):
                     value = getattr(args, field)
                     if value is not None:

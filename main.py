@@ -55,7 +55,7 @@ def _is_allowed(user_id: Optional[int], allowed: list[int]) -> bool:
     if user_id is None:
         return False
     if not allowed:
-        return True
+        return False
     return user_id in allowed
 
 
@@ -117,6 +117,17 @@ def _progress_text(tool_name: str) -> str:
     if "write" in name or "edit" in name:
         return "Upravuji soubory…"
     return "Pracuji…"
+
+
+def _max_file_bytes() -> tuple[int, float]:
+    raw = os.environ.get("AIDE_TELEGRAM_MAX_FILE_MB", "10").strip().lower()
+    try:
+        mb = float(raw)
+    except ValueError:
+        mb = 10.0
+    if mb <= 0:
+        mb = 10.0
+    return int(mb * 1024 * 1024), mb
 
 
 async def _progress_worker(bot, chat_id: int, message_id: int, queue: asyncio.Queue) -> None:
@@ -191,26 +202,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     attachment_paths: list[str] = []
     inbox = _ensure_inbox(workspace)
+    max_bytes, max_mb = _max_file_bytes()
+    oversize = False
 
     if message.photo:
         photo = message.photo[-1]
-        file = await photo.get_file()
-        ext = ".jpg"
-        filename = f"{int(time.time())}_{photo.file_unique_id}{ext}"
-        target = inbox / filename
-        await file.download_to_drive(custom_path=str(target))
-        attachment_paths.append(str(target))
+        if photo.file_size and photo.file_size > max_bytes:
+            oversize = True
+        else:
+            file = await photo.get_file()
+            ext = ".jpg"
+            filename = f"{int(time.time())}_{photo.file_unique_id}{ext}"
+            target = inbox / filename
+            await file.download_to_drive(custom_path=str(target))
+            attachment_paths.append(str(target))
 
     if message.document:
         doc = message.document
-        file = await doc.get_file()
-        ext = Path(doc.file_name or "").suffix or Path(file.file_path or "").suffix or ".bin"
-        filename = f"{int(time.time())}_{doc.file_unique_id}{ext}"
-        target = inbox / filename
-        await file.download_to_drive(custom_path=str(target))
-        attachment_paths.append(str(target))
+        if doc.file_size and doc.file_size > max_bytes:
+            oversize = True
+        else:
+            file = await doc.get_file()
+            ext = Path(doc.file_name or "").suffix or Path(file.file_path or "").suffix or ".bin"
+            filename = f"{int(time.time())}_{doc.file_unique_id}{ext}"
+            target = inbox / filename
+            await file.download_to_drive(custom_path=str(target))
+            attachment_paths.append(str(target))
 
     prompt = _build_prompt(message.text or message.caption, attachment_paths)
+    if oversize:
+        warning = f"Příloha je příliš velká (max {int(max_mb)} MB) a nebyla stažena."
+        if not prompt:
+            await message.reply_text(warning)
+            return
+        await message.reply_text(warning)
     if not prompt:
         await message.reply_text("Nepřišel text ani příloha.")
         return

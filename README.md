@@ -125,6 +125,8 @@ Typická struktura:
 - Escape režim pro MarkdownV2: `AIDE_TELEGRAM_ESCAPE=none|aggressive`.
 - Stavové updaty během běhu: `AIDE_TELEGRAM_PROGRESS=1` (0 = vypnuto).
 - Claude Code bez potvrzování: `AIDE_CLAUDE_SKIP_PERMISSIONS=1`.
+- Max velikost příloh: `AIDE_TELEGRAM_MAX_FILE_MB` (default 10).
+- Scheduler paralelismus: `AIDE_SCHEDULER_WORKERS` (default 2).
 
 ## Tooling konvence (shrnutí)
 
@@ -168,7 +170,7 @@ Pak stačí:
 
 - Telegram nic nevrací:
   - ověř `TELEGRAM_TOKEN` v `.env`
-  - ověř `ALLOWED_USERS` (tvůj Telegram user ID)
+  - ověř `ALLOWED_USERS` (tvůj Telegram user ID) — prázdné znamená žádný přístup
   - zkontroluj `bot.log`
 
 - Scheduler neposílá připomínky:

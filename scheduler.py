@@ -1,5 +1,7 @@
 import argparse
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -8,12 +10,21 @@ from croniter import croniter
 
 from agent import run_agent
 from config import load_workspace_env, resolve_workspace
-from core_tools._utils import atomic_write_json, file_lock, load_json
+from core_tools._utils import atomic_write_json, file_lock, load_json, parse_dt
 from core_tools.send_message import send_message
 
 
 POLL_INTERVAL_S = 60
 GRACE_WINDOW_S = 61
+
+
+def _get_worker_count() -> int:
+    raw = os.environ.get("AIDE_SCHEDULER_WORKERS", "2").strip().lower()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 2
+    return max(1, value)
 
 
 def _log_line(workspace: Path, text: str) -> None:
@@ -22,15 +33,6 @@ def _log_line(workspace: Path, text: str) -> None:
     log_file = log_dir / f"{datetime.now().date().isoformat()}.log"
     with log_file.open("a", encoding="utf-8") as f:
         f.write(f"[{datetime.now().isoformat()}] {text}\n")
-
-
-def _parse_dt(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except Exception:
-        return None
 
 
 def _is_daily(schedule: str) -> bool:
@@ -72,8 +74,17 @@ def _cleanup_logs(workspace: Path, days: int = 14) -> None:
             continue
 
 
-def _run_cron_jobs(workspace: Path, now: datetime) -> None:
+def _execute_cron_job(workspace: Path, job_id: Optional[str], prompt: str) -> None:
+    try:
+        answer, _sid, _tool_log = run_agent(prompt, working_dir=workspace)
+        send_message(answer)
+    except Exception as exc:
+        _log_line(workspace, f"Cron job failed ({job_id}): {exc}")
+
+
+def _run_cron_jobs(workspace: Path, now: datetime, executor: ThreadPoolExecutor) -> None:
     cron_path = workspace / "data" / "cron.json"
+    due_jobs: List[Dict[str, Any]] = []
     with file_lock(cron_path):
         jobs: List[Dict[str, Any]] = load_json(cron_path, [])
         changed = False
@@ -86,36 +97,40 @@ def _run_cron_jobs(workspace: Path, now: datetime) -> None:
             if not schedule or not prompt:
                 continue
 
-            last_run = _parse_dt(job.get("last_run"))
-            if not _should_run(schedule, last_run, now):
+            try:
+                last_run = parse_dt(job.get("last_run"))
+                if not _should_run(schedule, last_run, now):
+                    continue
+            except Exception as exc:
+                _log_line(workspace, f"Invalid cron schedule ({job.get('id')}): {schedule} ({exc})")
                 continue
 
-            _log_line(workspace, f"Running cron job {job.get('id')}")
-            try:
-                answer, _sid, _tool_log = run_agent(prompt, working_dir=workspace)
-                send_message(answer)
-                job["last_run"] = now.isoformat()
-                changed = True
-            except Exception as exc:
-                _log_line(workspace, f"Cron job failed: {exc}")
+            job["last_run"] = now.isoformat()
+            due_jobs.append({"id": job.get("id"), "prompt": prompt})
+            changed = True
 
         if changed:
             atomic_write_json(cron_path, jobs)
 
+    for job in due_jobs:
+        _log_line(workspace, f"Scheduling cron job {job.get('id')}")
+        executor.submit(_execute_cron_job, workspace, job.get("id"), job["prompt"])
+
 
 def _run_task_reminders(workspace: Path, now: datetime) -> None:
     tasks_path = workspace / "data" / "tasks.json"
+    due: List[Dict[str, Any]] = []
     with file_lock(tasks_path):
         tasks: List[Dict[str, Any]] = load_json(tasks_path, [])
-        changed = False
 
         for task in tasks:
             if task.get("status") == "completed":
                 continue
-            remind_at = _parse_dt(task.get("remind"))
+            remind_at = parse_dt(task.get("remind"))
             if not remind_at:
                 continue
-            if task.get("remind_sent_at"):
+            sent_at = parse_dt(task.get("remind_sent_at"))
+            if sent_at and sent_at >= remind_at:
                 continue
             if remind_at <= now:
                 title = task.get("title", "(untitled)")
@@ -123,13 +138,30 @@ def _run_task_reminders(workspace: Path, now: datetime) -> None:
                 message = f"Připomínka: {title}"
                 if project:
                     message += f" (projekt: {project})"
-                try:
-                    send_message(message)
-                    task["remind_sent_at"] = now.isoformat()
-                    changed = True
-                except Exception as exc:
-                    _log_line(workspace, f"Reminder failed: {exc}")
+                due.append({"id": task.get("id"), "message": message})
 
+    if not due:
+        return
+
+    sent_ids: List[str] = []
+    for item in due:
+        try:
+            send_message(item["message"])
+            if item.get("id"):
+                sent_ids.append(item["id"])
+        except Exception as exc:
+            _log_line(workspace, f"Reminder failed: {exc}")
+
+    if not sent_ids:
+        return
+
+    with file_lock(tasks_path):
+        tasks = load_json(tasks_path, [])
+        changed = False
+        for task in tasks:
+            if task.get("id") in sent_ids:
+                task["remind_sent_at"] = now.isoformat()
+                changed = True
         if changed:
             atomic_write_json(tasks_path, tasks)
 
@@ -143,11 +175,12 @@ def main() -> None:
     load_workspace_env(workspace)
 
     _log_line(workspace, "Scheduler started")
+    executor = ThreadPoolExecutor(max_workers=_get_worker_count())
 
     while True:
         now = datetime.now()
         try:
-            _run_cron_jobs(workspace, now)
+            _run_cron_jobs(workspace, now, executor)
             _run_task_reminders(workspace, now)
             _cleanup_logs(workspace)
         except Exception as exc:
