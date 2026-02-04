@@ -30,25 +30,27 @@ sudo apt install -y git python3 python3-pip
 
 3. Klonuj repo:
 ```
-git clone https://github.com/PavelTajdus/Aide
-cd Aide
+sudo mkdir -p /opt/aide
+cd /opt/aide
+git clone https://github.com/PavelTajdus/Aide engine
+cd engine
 ```
 
 4. Inicializuj workspace:
 ```
-./scripts/init.sh /opt/aide-workspace
+./scripts/init.sh /opt/aide/workspace
 ```
 
-5. Vyplň `/opt/aide-workspace/.env` (tokeny, user ID, chat ID).
+5. Vyplň `/opt/aide/workspace/.env` (tokeny, user ID, chat ID).
 
 6. Spusť bota + scheduler:
 ```
-./scripts/run.sh /opt/aide-workspace
+./scripts/run.sh /opt/aide/workspace
 ```
 
 7. Logy:
 ```
-./scripts/logs.sh /opt/aide-workspace
+./scripts/logs.sh /opt/aide/workspace
 ```
 
 ## Workspace — jak to funguje
@@ -140,9 +142,9 @@ Typická struktura:
 
 Doporučený postup:
 ```
-cd /opt/aide-workspace
+cd /opt/aide/workspace
 git init
-cp /opt/Aide/templates/workspace.gitignore .gitignore
+cp /opt/aide/engine/templates/workspace.gitignore .gitignore
 git add .
 git commit -m "initial workspace"
 git remote add origin <YOUR_PRIVATE_REPO>
@@ -151,7 +153,7 @@ git push -u origin main
 
 Pak stačí:
 ```
-/opt/Aide/scripts/backup.sh /opt/aide-workspace --push
+/opt/aide/engine/scripts/backup.sh /opt/aide/workspace --push
 ```
 
 ## Troubleshooting
