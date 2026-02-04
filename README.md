@@ -16,13 +16,17 @@
 
 ## Instalace na VPS (Linux)
 
-1. Nainstaluj Python 3 a pip:
+1. Nainstaluj Git, Python 3 a pip:
 ```
 sudo apt update
-sudo apt install -y python3 python3-pip
+sudo apt install -y git python3 python3-pip
 ```
 
 2. Nainstaluj Claude Code CLI a přihlas se (vyžaduje předplatné).
+   - https://claude.com/product/claude-code
+   - Dokumentace: https://code.claude.com/docs/en/overview
+   - Ověř, že `claude` je v PATH (`which claude`).
+   - Typicky se instaluje do `~/.local/bin` nebo `/usr/local/bin`.
 
 3. Klonuj repo:
 ```
@@ -107,6 +111,12 @@ Typická struktura:
 ./scripts/ps.sh [workspace]
 ```
 
+- Backup workspace (git):
+```
+./scripts/backup.sh [workspace]
+./scripts/backup.sh [workspace] --push
+```
+
 ## Poznámky
 
 - Workspace **nikdy** nepatří do git repa enginu.
@@ -123,6 +133,24 @@ Typická struktura:
 - API klíče vždy z `.env`, nic hardcoded.
 - Po vytvoření toolu vytvoř i skill v `.claude/skills/`.
 - Šablona toolu: `templates/tool_skeleton.py`
+
+## Backup workspace (git)
+
+Doporučený postup:
+```
+cd /opt/aide-workspace
+git init
+cp /opt/Aide/templates/workspace.gitignore .gitignore
+git add .
+git commit -m "initial workspace"
+git remote add origin <YOUR_PRIVATE_REPO>
+git push -u origin main
+```
+
+Pak stačí:
+```
+/opt/Aide/scripts/backup.sh /opt/aide-workspace --push
+```
 
 ## Troubleshooting
 

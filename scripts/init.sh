@@ -29,6 +29,10 @@ if [[ ! -f "$WORKSPACE/CLAUDE.md" ]]; then
   cp "$ENGINE_DIR/templates/CLAUDE.md" "$WORKSPACE/CLAUDE.md"
 fi
 
+if [[ ! -f "$WORKSPACE/.gitignore" ]]; then
+  cp "$ENGINE_DIR/templates/workspace.gitignore" "$WORKSPACE/.gitignore"
+fi
+
 if [[ ! -f "$WORKSPACE/.env" ]]; then
   cat > "$WORKSPACE/.env" <<ENV
 AIDE_WORKSPACE=$WORKSPACE
