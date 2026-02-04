@@ -16,10 +16,10 @@
 
 ## Instalace na VPS (Linux)
 
-1. Nainstaluj Git, Python 3 a pip:
+1. Nainstaluj Git, Python 3, pip a venv:
 ```
 sudo apt update
-sudo apt install -y git python3 python3-pip
+sudo apt install -y git python3 python3-pip python3-venv
 ```
 
 2. Nainstaluj Claude Code CLI a přihlas se (vyžaduje předplatné).
@@ -41,17 +41,30 @@ cd engine
 ./scripts/init.sh /opt/aide/workspace
 ```
 
-5. Vyplň `/opt/aide/workspace/.env` (tokeny, user ID, chat ID).
-
-6. Spusť bota + scheduler:
+5. Nastav ownership, ať nemusíš používat sudo pro běh:
 ```
-./scripts/run.sh /opt/aide/workspace
+sudo chown -R $USER:$USER /opt/aide
 ```
 
-7. Logy:
+6. Vyplň `/opt/aide/workspace/.env` (tokeny, user ID, chat ID).
+
+7. Nainstaluj python dependencies (doporučeno do venv):
+```
+python3 -m venv /opt/aide/venv
+/opt/aide/venv/bin/pip install -r /opt/aide/engine/requirements.txt
+```
+
+8. Spusť bota + scheduler:
+```
+PYTHON_BIN=/opt/aide/venv/bin/python ./scripts/run.sh /opt/aide/workspace
+```
+
+9. Logy:
 ```
 ./scripts/logs.sh /opt/aide/workspace
 ```
+
+Poznámka: Pokud spouštíš přes `sudo`, pip instaluje balíčky do root prostředí.
 
 ## Workspace — jak to funguje
 
