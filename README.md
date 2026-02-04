@@ -16,10 +16,17 @@
 
 ## Instalace na VPS (Linux)
 
+Nejjednodušší varianta je spustit instalační skript (všechno nastaví za tebe):
+```
+sudo ./scripts/install_vps.sh
+```
+
+Ručně (pokud chceš):
+
 1. Nainstaluj Git, Python 3, pip a venv:
 ```
 sudo apt update
-sudo apt install -y git python3 python3-pip python3-venv
+sudo apt install -y git python3 python3-pip python3-venv python3-full
 ```
 
 2. Nainstaluj Claude Code CLI a přihlas se (vyžaduje předplatné).
