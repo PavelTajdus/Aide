@@ -4,14 +4,14 @@
 
 1. Inicializace workspace:
 ```
-./scripts/init.sh /Users/pavel/aide-workspace
+./scripts/init.sh ~/aide-workspace
 ```
 
 2. Nastav `TELEGRAM_TOKEN`, `ALLOWED_USERS`, `AIDE_DEFAULT_CHAT_ID` ve `~/aide-workspace/.env`.
 
 3. Spuštění:
 ```
-./scripts/run.sh /Users/pavel/aide-workspace
+./scripts/run.sh ~/aide-workspace
 ```
 
 ## Instalace na VPS (Linux)
@@ -114,6 +114,7 @@ Typická struktura:
 - Telegram output je defaultně plain text. Lze přepnout na MarkdownV2 přes `AIDE_TELEGRAM_PARSE_MODE=markdown_v2`.
 - Escape režim pro MarkdownV2: `AIDE_TELEGRAM_ESCAPE=none|aggressive`.
 - Stavové updaty během běhu: `AIDE_TELEGRAM_PROGRESS=1` (0 = vypnuto).
+- Claude Code bez potvrzování: `AIDE_CLAUDE_SKIP_PERMISSIONS=1`.
 
 ## Tooling konvence (shrnutí)
 

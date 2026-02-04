@@ -107,6 +107,9 @@ def run_agent(
     load_workspace_env(working_dir)
 
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+    skip_perms = os.environ.get("AIDE_CLAUDE_SKIP_PERMISSIONS", "1").strip().lower()
+    if skip_perms in ("1", "true", "yes", "on"):
+        cmd.append("--dangerously-skip-permissions")
     if session_id:
         cmd.extend(["--resume", session_id])
     cmd.append(prompt)
