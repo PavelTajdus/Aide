@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PYTHON_BIN=${PYTHON_BIN:-python3}
+ENGINE_DIR=$(cd "$(dirname "$0")/.." && pwd)
 
 resolve_workspace () {
   local arg=${1:-}
@@ -23,6 +24,14 @@ PY
 
   if [[ -f "CLAUDE.md" || -d "data" ]]; then
     pwd
+    return
+  fi
+
+  if [[ -d "$ENGINE_DIR/../workspace" ]]; then
+    $PYTHON_BIN - <<PY
+import os
+print(os.path.abspath(os.path.expanduser("$ENGINE_DIR/../workspace")))
+PY
     return
   fi
 

@@ -27,6 +27,14 @@ PY
     return
   fi
 
+  if [[ -d "$ENGINE_DIR/../workspace" ]]; then
+    $PYTHON_BIN - <<PY
+import os
+print(os.path.abspath(os.path.expanduser("$ENGINE_DIR/../workspace")))
+PY
+    return
+  fi
+
   $PYTHON_BIN - <<PY
 import os
 print(os.path.abspath(os.path.expanduser("~/aide-workspace")))
