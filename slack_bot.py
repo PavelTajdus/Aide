@@ -434,6 +434,42 @@ def main() -> None:
             event.get("files", []) or [],
         )
 
+    @app.command("/new")
+    def handle_new_command(ack, body, logger):
+        ack()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not _is_allowed(user_id, allowed):
+            return
+        # Clear all sessions for this channel
+        path = _sessions_path(workspace)
+        with file_lock(path):
+            data = load_json(path, {})
+            to_remove = [k for k in data if k.startswith(f"{channel_id}:")]
+            for k in to_remove:
+                data.pop(k, None)
+            atomic_write_json(path, data)
+        _post_message(client, channel_id, "🔄 Session resetována. Začínáme čistý.")
+
+    @app.command("/stop")
+    def handle_stop_command(ack, body, logger):
+        ack()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not _is_allowed(user_id, allowed):
+            return
+        # Kill any running agent process for this channel
+        stopped = False
+        for key, proc in list(RUNNING.items()):
+            if key.startswith(f"{channel_id}:") and proc.poll() is None:
+                proc.terminate()
+                RUNNING.pop(key, None)
+                stopped = True
+        if stopped:
+            _post_message(client, channel_id, "🛑 Agent zastaven.")
+        else:
+            _post_message(client, channel_id, "ℹ️ Žádný agent neběží.")
+
     SocketModeHandler(app, app_token).start()
 
 
