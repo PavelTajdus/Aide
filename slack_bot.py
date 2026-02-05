@@ -117,6 +117,70 @@ def _build_prompt(text: Optional[str], attachment_paths: list[str]) -> str:
     return base
 
 
+def _fetch_thread_history(
+    client: WebClient,
+    channel_id: str,
+    thread_ts: str,
+    bot_user_id: Optional[str],
+    limit: int = 20,
+) -> list[Dict[str, str]]:
+    """Fetch thread history from Slack API. Returns list of {role, content} dicts."""
+    try:
+        result = client.conversations_replies(
+            channel=channel_id,
+            ts=thread_ts,
+            limit=limit,
+        )
+        messages = result.get("messages", [])
+    except SlackApiError:
+        return []
+
+    history = []
+    for msg in messages:
+        # Skip subtypes like join, leave, etc.
+        if msg.get("subtype"):
+            continue
+        text = msg.get("text", "").strip()
+        if not text:
+            continue
+        user = msg.get("user")
+        bot_id = msg.get("bot_id")
+
+        # Determine role
+        if bot_id or (bot_user_id and user == bot_user_id):
+            role = "assistant"
+        else:
+            role = "user"
+            # Strip bot mention from user messages
+            if bot_user_id:
+                text = re.sub(rf"<@{re.escape(bot_user_id)}>", "", text).strip()
+
+        if text:
+            history.append({"role": role, "content": text})
+
+    return history
+
+
+def _format_thread_context(history: list[Dict[str, str]]) -> str:
+    """Format thread history as context for Claude."""
+    if not history:
+        return ""
+
+    lines = ["Předchozí konverzace ve vlákně:"]
+    lines.append("---")
+    for msg in history:
+        role_label = "Uživatel" if msg["role"] == "user" else "Aide"
+        # Truncate very long messages
+        content = msg["content"]
+        if len(content) > 500:
+            content = content[:500] + "..."
+        lines.append(f"{role_label}: {content}")
+    lines.append("---")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def _progress_text(tool_name: str) -> str:
     name = tool_name.lower()
     if "web" in name or "search" in name:
@@ -224,6 +288,7 @@ def _process_message(
     thread_root: Optional[str],
     text: str,
     files: list[Dict[str, Any]],
+    bot_user_id: Optional[str] = None,
 ) -> None:
     cmd = _handle_command(text)
     if cmd == "new":
@@ -276,6 +341,16 @@ def _process_message(
     if not prompt:
         _post_message(client, channel_id, "Nepřišel text ani příloha.", thread_root)
         return
+
+    # Fetch thread history for context (exclude the last message which is current prompt)
+    if thread_root:
+        history = _fetch_thread_history(client, channel_id, thread_root, bot_user_id, limit=20)
+        # Remove last message if it matches current prompt (avoid duplication)
+        if history and history[-1]["role"] == "user":
+            history = history[:-1]
+        thread_context = _format_thread_context(history)
+        if thread_context:
+            prompt = f"{thread_context}\nAktuální zpráva:\n{prompt}"
 
     thinking_ts = _post_message(client, channel_id, "Přemýšlím...", thread_root)
     if not thinking_ts:
@@ -364,7 +439,7 @@ def _handle_event(
 
     thread = threading.Thread(
         target=_process_message,
-        args=(client, workspace, channel_id, thread_root, cleaned, files),
+        args=(client, workspace, channel_id, thread_root, cleaned, files, bot_user_id),
         daemon=True,
     )
     thread.start()
