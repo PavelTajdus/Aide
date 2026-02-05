@@ -132,7 +132,8 @@ def _fetch_thread_history(
             limit=limit,
         )
         messages = result.get("messages", [])
-    except SlackApiError:
+    except SlackApiError as e:
+        print(f"[WARN] Failed to fetch thread history: {e.response.get('error', str(e))}")
         return []
 
     history = []
