@@ -162,10 +162,30 @@ def run_agent(
         if text:
             assistant_chunks.append(text)
 
-        if etype == "assistant" and "tool_use" in evt:
+        # Detect tool use from various event formats
+        tool_detected = False
+        tool_names_found = []
+
+        # Check for tool_use key
+        if "tool_use" in evt:
+            tool_detected = True
+            tool_names_found = _extract_tool_names(evt)
+        # Check for content blocks with tool_use type
+        elif isinstance(evt.get("content"), list):
+            for block in evt["content"]:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tool_detected = True
+                    if block.get("name"):
+                        tool_names_found.append(block["name"])
+        # Check for tool_name at top level
+        elif evt.get("tool_name") or evt.get("name"):
+            tool_detected = True
+            tool_names_found = _extract_tool_names(evt)
+
+        if tool_detected:
             tool_log.append(evt)
-            if tool_cb:
-                for name in _extract_tool_names(evt):
+            if tool_cb and tool_names_found:
+                for name in tool_names_found:
                     tool_cb(name)
 
         if etype in ("result", "final", "message_stop"):

@@ -224,21 +224,12 @@ def _progress_worker(
     channel_id: str,
     message_ts: str,
     q: queue.Queue,
-    thread_ts: Optional[str] = None,
 ) -> None:
     last_update = 0.0
     last_text: Optional[str] = None
-    dots = 0
 
     while True:
-        try:
-            # Wait up to 3 seconds for a message, otherwise show "thinking" animation
-            item = q.get(timeout=3.0)
-        except queue.Empty:
-            # No tool callback received, show animated thinking
-            dots = (dots % 3) + 1
-            item = "Přemýšlím" + "." * dots
-
+        item = q.get()
         if item is None:
             break
 
@@ -260,7 +251,7 @@ def _progress_worker(
             continue
 
         now = time.time()
-        wait = max(0.0, 1.5 - (now - last_update))
+        wait = max(0.0, 1.0 - (now - last_update))
         if wait:
             time.sleep(wait)
 
