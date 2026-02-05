@@ -219,14 +219,31 @@ def _download_file(
     return str(target)
 
 
-def _progress_worker(client: WebClient, channel_id: str, message_ts: str, q: queue.Queue) -> None:
+def _progress_worker(
+    client: WebClient,
+    channel_id: str,
+    message_ts: str,
+    q: queue.Queue,
+    thread_ts: Optional[str] = None,
+) -> None:
     last_update = 0.0
     last_text: Optional[str] = None
+    dots = 0
+
     while True:
-        item = q.get()
+        try:
+            # Wait up to 3 seconds for a message, otherwise show "thinking" animation
+            item = q.get(timeout=3.0)
+        except queue.Empty:
+            # No tool callback received, show animated thinking
+            dots = (dots % 3) + 1
+            item = "Přemýšlím" + "." * dots
+
         if item is None:
             break
+
         pending = item
+        # Drain queue for latest message
         while True:
             try:
                 nxt = q.get_nowait()
@@ -236,12 +253,17 @@ def _progress_worker(client: WebClient, channel_id: str, message_ts: str, q: que
                 pending = nxt
             except queue.Empty:
                 break
-        if not pending or pending == last_text:
+
+        if pending is None:
+            break
+        if pending == last_text:
             continue
+
         now = time.time()
-        wait = max(0.0, 1.2 - (now - last_update))
+        wait = max(0.0, 1.5 - (now - last_update))
         if wait:
             time.sleep(wait)
+
         try:
             client.chat_update(channel=channel_id, ts=message_ts, text=pending)
             last_text = pending
