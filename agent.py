@@ -153,6 +153,11 @@ def run_agent(
             continue
 
         etype = _event_type(evt)
+
+        # Debug: log all events to see what Claude CLI sends
+        if os.environ.get("AIDE_DEBUG_EVENTS"):
+            print(f"[DEBUG] Event type={etype}, keys={list(evt.keys())}")
+
         if etype in ("system", "session"):
             sid = evt.get("session_id") or evt.get("session")
             if isinstance(sid, str):
