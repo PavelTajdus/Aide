@@ -198,15 +198,15 @@ def _progress_text(tool_name: str, tool_input: Optional[Dict[str, Any]] = None) 
         if url:
             # Strip protocol for brevity
             url = re.sub(r"^https?://", "", url)
-            return f"🌐 WebFetch: {_truncate(url)}"
-        return "🌐 WebFetch…"
+            return f"WebFetch: {_truncate(url)}"
+        return "WebFetch…"
 
     # WebSearch - show query
     if name == "websearch":
         query = inp.get("query", "")
         if query:
-            return f"🔍 WebSearch: {_truncate(query)}"
-        return "🔍 WebSearch…"
+            return f"WebSearch: {_truncate(query)}"
+        return "WebSearch…"
 
     # Read - show file path
     if name == "read":
@@ -214,55 +214,55 @@ def _progress_text(tool_name: str, tool_input: Optional[Dict[str, Any]] = None) 
         if path:
             # Show just filename or last part of path
             short = Path(path).name if "/" in path else path
-            return f"📖 Read: {_truncate(short, 50)}"
-        return "📖 Read…"
+            return f"Read: {_truncate(short, 50)}"
+        return "Read…"
 
     # Write - show file path
     if name == "write":
         path = inp.get("file_path", "")
         if path:
             short = Path(path).name if "/" in path else path
-            return f"✏️ Write: {_truncate(short, 50)}"
-        return "✏️ Write…"
+            return f"Write: {_truncate(short, 50)}"
+        return "Write…"
 
     # Edit - show file path
     if name == "edit":
         path = inp.get("file_path", "")
         if path:
             short = Path(path).name if "/" in path else path
-            return f"✏️ Edit: {_truncate(short, 50)}"
-        return "✏️ Edit…"
+            return f"Edit: {_truncate(short, 50)}"
+        return "Edit…"
 
     # Bash - show command
     if name == "bash":
         cmd = inp.get("command", "")
         if cmd:
-            return f"💻 Bash: {_truncate(cmd)}"
-        return "💻 Bash…"
+            return f"Bash: {_truncate(cmd)}"
+        return "Bash…"
 
     # Grep - show pattern
     if name == "grep":
         pattern = inp.get("pattern", "")
         if pattern:
-            return f"🔎 Grep: {_truncate(pattern)}"
-        return "🔎 Grep…"
+            return f"Grep: {_truncate(pattern)}"
+        return "Grep…"
 
     # Glob - show pattern
     if name == "glob":
         pattern = inp.get("pattern", "")
         if pattern:
-            return f"📁 Glob: {_truncate(pattern)}"
-        return "📁 Glob…"
+            return f"Glob: {_truncate(pattern)}"
+        return "Glob…"
 
     # Task - show description
     if name == "task":
         desc = inp.get("description", "")
         if desc:
-            return f"🤖 Task: {_truncate(desc)}"
-        return "🤖 Task…"
+            return f"Task: {_truncate(desc)}"
+        return "Task…"
 
     # Generic fallback
-    return f"⚙️ {tool_name}…"
+    return f"{tool_name}…"
 
 
 def _download_file(
