@@ -127,6 +127,44 @@ def _extract_tools_from_event(evt: Event) -> List[ToolInfo]:
     return tools
 
 
+def get_session_usage(
+    session_id: str,
+    working_dir: Optional[Path] = None,
+    timeout_s: int = 30,
+) -> Optional[Dict]:
+    """Get usage info for a session by sending a minimal prompt."""
+    if working_dir is None:
+        working_dir = resolve_workspace()
+
+    load_workspace_env(working_dir)
+
+    cmd = ["claude", "-p", "--output-format", "json", "--resume", session_id, "Odpověz pouze: ok"]
+    skip_perms = os.environ.get("AIDE_CLAUDE_SKIP_PERMISSIONS", "1").strip().lower()
+    if skip_perms in ("1", "true", "yes", "on"):
+        cmd.append("--dangerously-skip-permissions")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(working_dir),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            env=os.environ.copy(),
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        return {
+            "session_id": session_id,
+            "usage": data.get("usage", {}),
+            "model_usage": data.get("modelUsage", {}),
+            "cost_usd": data.get("total_cost_usd", 0),
+        }
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+        return None
+
+
 def run_agent(
     prompt: str,
     session_id: Optional[str] = None,

@@ -14,7 +14,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-from agent import run_agent
+from agent import run_agent, get_session_usage
 from config import load_workspace_env, resolve_workspace
 from core_tools._utils import atomic_write_json, file_lock, load_json
 from markdown_to_mrkdwn import SlackMarkdownConverter
@@ -667,9 +667,57 @@ def main() -> None:
                 RUNNING.pop(key, None)
                 stopped = True
         if stopped:
-            _post_message(client, channel_id, "🛑 Agent zastaven.")
+            _post_message(client, channel_id, "Agent zastaven.")
         else:
-            _post_message(client, channel_id, "ℹ️ Žádný agent neběží.")
+            _post_message(client, channel_id, "Žádný agent neběží.")
+
+    @app.command("/session")
+    def handle_session_command(ack, body, logger):
+        ack()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not _is_allowed(user_id, allowed):
+            return
+
+        # Get session for this channel (root session)
+        session_id = _get_session_id(workspace, channel_id, None)
+        if not session_id:
+            _post_message(client, channel_id, "Žádná aktivní session.")
+            return
+
+        _post_message(client, channel_id, "Zjišťuji stav session...")
+
+        usage_info = get_session_usage(session_id, working_dir=workspace)
+        if not usage_info:
+            _post_message(client, channel_id, f"Session: `{session_id[:8]}...`\nNepodařilo se získat usage info.")
+            return
+
+        # Extract info
+        model_usage = usage_info.get("model_usage", {})
+        model_name = list(model_usage.keys())[0] if model_usage else "unknown"
+        model_data = model_usage.get(model_name, {})
+
+        context_window = model_data.get("contextWindow", 200000)
+        input_tokens = model_data.get("inputTokens", 0)
+        cache_read = model_data.get("cacheReadInputTokens", 0)
+        cache_create = model_data.get("cacheCreationInputTokens", 0)
+        output_tokens = model_data.get("outputTokens", 0)
+
+        # Total context used is approximately cache_read (previous context) + new input
+        total_context = cache_read + cache_create + input_tokens
+        usage_percent = (total_context / context_window) * 100 if context_window else 0
+        remaining = context_window - total_context
+
+        cost = usage_info.get("cost_usd", 0)
+
+        msg = (
+            f"*Session:* `{session_id[:8]}...`\n"
+            f"*Model:* {model_name}\n"
+            f"*Kontext:* {total_context:,} / {context_window:,} tokenů ({usage_percent:.1f}%)\n"
+            f"*Zbývá:* ~{remaining:,} tokenů\n"
+            f"*Tento dotaz:* ${cost:.4f}"
+        )
+        _post_message(client, channel_id, msg)
 
     SocketModeHandler(app, app_token).start()
 
