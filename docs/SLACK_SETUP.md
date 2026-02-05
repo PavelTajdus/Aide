@@ -34,6 +34,11 @@ Poznámka: Pokud Slack UI vyžaduje Request URL, použij vlastní veřejný endp
 6. Přidej bota do kanálu
 - V kanálu napiš `/invite @your-bot-name`.
 
+7. Zjisti svoje Slack user ID
+- Klikni na svůj profil vpravo nahoře.
+- Zvol "Profil".
+- Klikni na tři tečky a zvol "Copy member ID".
+
 7. Nastav `.env` ve workspace
 ```
 SLACK_BOT_TOKEN=xoxb-...
