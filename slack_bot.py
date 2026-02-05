@@ -374,6 +374,8 @@ def _handle_command(text: str) -> Optional[str]:
         return "new"
     if cmd in ("stop", "zastav"):
         return "stop"
+    if cmd in ("session", "status", "stav"):
+        return "session"
     return None
 
 
@@ -427,6 +429,34 @@ def _process_message(
             proc.kill()
         RUNNING.pop(key, None)
         _post_message(client, channel_id, "Session zastavena.", thread_root)
+        return
+    if cmd == "session":
+        session_id = _get_session_id(workspace, channel_id, thread_root)
+        if not session_id:
+            _post_message(client, channel_id, "Žádná aktivní session.", thread_root)
+            return
+        _post_message(client, channel_id, "Zjišťuji stav...", thread_root)
+        usage_info = get_session_usage(session_id, working_dir=workspace)
+        if not usage_info:
+            _post_message(client, channel_id, f"Session: `{session_id[:8]}...` - nelze získat info", thread_root)
+            return
+        model_usage = usage_info.get("model_usage", {})
+        model_name = list(model_usage.keys())[0] if model_usage else "unknown"
+        model_data = model_usage.get(model_name, {})
+        context_window = model_data.get("contextWindow", 200000)
+        cache_read = model_data.get("cacheReadInputTokens", 0)
+        cache_create = model_data.get("cacheCreationInputTokens", 0)
+        input_tokens = model_data.get("inputTokens", 0)
+        total_context = cache_read + cache_create + input_tokens
+        usage_percent = (total_context / context_window) * 100 if context_window else 0
+        remaining = context_window - total_context
+        msg = (
+            f"*Session:* `{session_id[:8]}...`\n"
+            f"*Model:* {model_name}\n"
+            f"*Kontext:* {total_context:,} / {context_window:,} ({usage_percent:.1f}%)\n"
+            f"*Zbývá:* ~{remaining:,} tokenů"
+        )
+        _post_message(client, channel_id, msg, thread_root)
         return
 
     attachment_paths: list[str] = []
@@ -679,45 +709,47 @@ def main() -> None:
         if not _is_allowed(user_id, allowed):
             return
 
-        # Get session for this channel (root session)
-        session_id = _get_session_id(workspace, channel_id, None)
-        if not session_id:
-            _post_message(client, channel_id, "Žádná aktivní session.")
+        # Get ALL sessions for this channel (root + threads)
+        path = _sessions_path(workspace)
+        with file_lock(path):
+            data = load_json(path, {})
+
+        channel_sessions = {k: v for k, v in data.items() if k.startswith(f"{channel_id}:")}
+
+        if not channel_sessions:
+            _post_message(client, channel_id, "Žádná aktivní session v tomto kanálu.")
             return
 
-        _post_message(client, channel_id, "Zjišťuji stav session...")
+        _post_message(client, channel_id, f"Zjišťuji stav {len(channel_sessions)} session...")
 
-        usage_info = get_session_usage(session_id, working_dir=workspace)
-        if not usage_info:
-            _post_message(client, channel_id, f"Session: `{session_id[:8]}...`\nNepodařilo se získat usage info.")
-            return
+        messages = []
+        for key, session_id in channel_sessions.items():
+            thread_ts = key.split(":", 1)[1] if ":" in key else "root"
+            thread_label = "kanál" if thread_ts == "root" else f"vlákno"
 
-        # Extract info
-        model_usage = usage_info.get("model_usage", {})
-        model_name = list(model_usage.keys())[0] if model_usage else "unknown"
-        model_data = model_usage.get(model_name, {})
+            usage_info = get_session_usage(session_id, working_dir=workspace)
+            if not usage_info:
+                messages.append(f"*{thread_label}:* `{session_id[:8]}...` - nelze získat info")
+                continue
 
-        context_window = model_data.get("contextWindow", 200000)
-        input_tokens = model_data.get("inputTokens", 0)
-        cache_read = model_data.get("cacheReadInputTokens", 0)
-        cache_create = model_data.get("cacheCreationInputTokens", 0)
-        output_tokens = model_data.get("outputTokens", 0)
+            model_usage = usage_info.get("model_usage", {})
+            model_name = list(model_usage.keys())[0] if model_usage else "unknown"
+            model_data = model_usage.get(model_name, {})
 
-        # Total context used is approximately cache_read (previous context) + new input
-        total_context = cache_read + cache_create + input_tokens
-        usage_percent = (total_context / context_window) * 100 if context_window else 0
-        remaining = context_window - total_context
+            context_window = model_data.get("contextWindow", 200000)
+            cache_read = model_data.get("cacheReadInputTokens", 0)
+            cache_create = model_data.get("cacheCreationInputTokens", 0)
+            input_tokens = model_data.get("inputTokens", 0)
 
-        cost = usage_info.get("cost_usd", 0)
+            total_context = cache_read + cache_create + input_tokens
+            usage_percent = (total_context / context_window) * 100 if context_window else 0
 
-        msg = (
-            f"*Session:* `{session_id[:8]}...`\n"
-            f"*Model:* {model_name}\n"
-            f"*Kontext:* {total_context:,} / {context_window:,} tokenů ({usage_percent:.1f}%)\n"
-            f"*Zbývá:* ~{remaining:,} tokenů\n"
-            f"*Tento dotaz:* ${cost:.4f}"
-        )
-        _post_message(client, channel_id, msg)
+            messages.append(
+                f"*{thread_label}:* `{session_id[:8]}...`\n"
+                f"  Kontext: {total_context:,} / {context_window:,} ({usage_percent:.1f}%)"
+            )
+
+        _post_message(client, channel_id, "\n\n".join(messages))
 
     SocketModeHandler(app, app_token).start()
 
