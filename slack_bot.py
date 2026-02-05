@@ -17,6 +17,9 @@ from slack_sdk.errors import SlackApiError
 from agent import run_agent
 from config import load_workspace_env, resolve_workspace
 from core_tools._utils import atomic_write_json, file_lock, load_json
+from markdown_to_mrkdwn import SlackMarkdownConverter
+
+_mrkdwn_converter = SlackMarkdownConverter()
 
 
 RUNNING: Dict[str, Any] = {}
@@ -332,6 +335,9 @@ def _process_message(
 
     if new_session_id:
         _set_session_id(workspace, channel_id, thread_root, new_session_id)
+
+    # Convert Markdown to Slack mrkdwn
+    answer = _mrkdwn_converter.convert(answer)
 
     chunks = _split_text(answer)
     _update_message(client, channel_id, thinking_ts, chunks[0])
