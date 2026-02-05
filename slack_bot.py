@@ -22,6 +22,41 @@ from markdown_to_mrkdwn import SlackMarkdownConverter
 _mrkdwn_converter = SlackMarkdownConverter()
 
 
+def _tables_to_codeblocks(text: str) -> str:
+    """Convert markdown tables to code blocks for Slack display."""
+    lines = text.split("\n")
+    result = []
+    table_lines = []
+    in_table = False
+
+    for line in lines:
+        stripped = line.strip()
+        # Detect table row (starts with | or is separator like |---|---|)
+        is_table_line = stripped.startswith("|") and stripped.endswith("|")
+
+        if is_table_line:
+            if not in_table:
+                in_table = True
+            table_lines.append(line)
+        else:
+            if in_table:
+                # End of table - wrap in code block
+                result.append("```")
+                result.extend(table_lines)
+                result.append("```")
+                table_lines = []
+                in_table = False
+            result.append(line)
+
+    # Handle table at end of text
+    if table_lines:
+        result.append("```")
+        result.extend(table_lines)
+        result.append("```")
+
+    return "\n".join(result)
+
+
 RUNNING: Dict[str, Any] = {}
 
 
@@ -495,7 +530,8 @@ def _process_message(
     if new_session_id:
         _set_session_id(workspace, channel_id, thread_root, new_session_id)
 
-    # Convert Markdown to Slack mrkdwn
+    # Convert tables to code blocks, then Markdown to Slack mrkdwn
+    answer = _tables_to_codeblocks(answer)
     answer = _mrkdwn_converter.convert(answer)
 
     chunks = _split_text(answer)
