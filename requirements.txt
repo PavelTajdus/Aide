@@ -3,4 +3,4 @@ python-dotenv==1.0.1
 croniter==2.0.5
 slack-bolt==1.20.0
 slack-sdk==3.27.1
-markdown-to-mrkdwn==1.2.0
+markdown-to-mrkdwn==0.3.1
