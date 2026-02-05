@@ -73,4 +73,5 @@ stop_proc () {
 }
 
 stop_proc "bot"
+stop_proc "slack"
 stop_proc "scheduler"

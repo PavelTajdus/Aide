@@ -353,6 +353,10 @@ def main() -> None:
     workspace = resolve_workspace(args.workspace)
     load_workspace_env(workspace)
 
+    telegram_enabled = os.environ.get("AIDE_TELEGRAM_ENABLED", "1").strip().lower()
+    if telegram_enabled in ("0", "false", "no", "off"):
+        return
+
     token = os.environ.get("TELEGRAM_TOKEN")
     if not token:
         raise RuntimeError("Missing TELEGRAM_TOKEN in workspace .env")

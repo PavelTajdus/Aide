@@ -59,4 +59,5 @@ show_proc () {
 }
 
 show_proc "bot"
+show_proc "slack"
 show_proc "scheduler"

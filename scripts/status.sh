@@ -61,4 +61,5 @@ status_proc () {
 }
 
 status_proc "bot"
+status_proc "slack"
 status_proc "scheduler"

@@ -8,11 +8,18 @@
 ```
 
 2. Nastav `TELEGRAM_TOKEN`, `ALLOWED_USERS`, `AIDE_DEFAULT_CHAT_ID` ve `~/aide-workspace/.env`.
+   - Pro Slack: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `AIDE_SLACK_ALLOWED_USERS`, `AIDE_SLACK_DEFAULT_TARGET`, `AIDE_SLACK_ENABLED=1`.
+   - Pro notifikace do Slacku: `AIDE_NOTIFY_PROVIDER=slack`.
 
 3. Spuštění:
 ```
 ./scripts/run.sh ~/aide-workspace
 ```
+
+## Integrace
+
+- Slack setup: [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md)
+- Telegram setup: [docs/TELEGRAM_SETUP.md](docs/TELEGRAM_SETUP.md)
 
 ## Instalace na VPS (Linux)
 
@@ -86,6 +93,7 @@ Typická struktura:
 ├── tools/
 ├── data/
 │   ├── sessions.json
+│   ├── sessions_slack.json
 │   ├── cron.json
 │   ├── tasks.json
 │   ├── projects.json
@@ -125,7 +133,7 @@ Typická struktura:
 
 - Logs:
 ```
-./scripts/logs.sh [workspace] [bot|scheduler]
+./scripts/logs.sh [workspace] [bot|slack|scheduler]
 ```
 
 - Process snapshot:
@@ -146,9 +154,23 @@ Typická struktura:
 - Telegram output je defaultně plain text. Lze přepnout na MarkdownV2 přes `AIDE_TELEGRAM_PARSE_MODE=markdown_v2`.
 - Escape režim pro MarkdownV2: `AIDE_TELEGRAM_ESCAPE=none|aggressive`.
 - Stavové updaty během běhu: `AIDE_TELEGRAM_PROGRESS=1` (0 = vypnuto).
+- Slack bot přes Socket Mode vyžaduje `SLACK_APP_TOKEN` (xapp-...) a `SLACK_BOT_TOKEN` (xoxb-...).
+- Slack přístup: `AIDE_SLACK_ALLOWED_USERS` (Slack user ID). Prázdné = žádný přístup.
+- Slack notifikace: `AIDE_NOTIFY_PROVIDER=slack` + `AIDE_SLACK_DEFAULT_TARGET` (channel ID nebo user ID).
+- Alternativa: `AIDE_SLACK_DEFAULT_CHANNEL_ID` nebo `AIDE_SLACK_DEFAULT_USER_ID`.
+- Typ cíle: `AIDE_SLACK_DEFAULT_TARGET_TYPE=auto|dm|channel` (default `auto`).
+- Slack bot se spouští automaticky, pokud jsou tokeny nastavené a `AIDE_SLACK_ENABLED=1`.
+- Max velikost Slack příloh: `AIDE_SLACK_MAX_FILE_MB` (default 10).
+- Slack přílohy se ukládají do `inbox/` a do promptu se předá jejich cesta.
+- Vypnutí kanálu: `AIDE_TELEGRAM_ENABLED=0` nebo `AIDE_SLACK_ENABLED=0`.
 - Claude Code bez potvrzování: `AIDE_CLAUDE_SKIP_PERMISSIONS=1`.
 - Max velikost příloh: `AIDE_TELEGRAM_MAX_FILE_MB` (default 10).
 - Scheduler paralelismus: `AIDE_SCHEDULER_WORKERS` (default 2).
+
+Slack setup (minimum):
+- Zapni Socket Mode a Event Subscriptions.
+- Events: `app_mention`, `message.im`.
+- Bot scopes typicky: `app_mentions:read`, `im:history`, `chat:write`, `im:write`, `files:read`.
 
 ## Tooling konvence (shrnutí)
 
@@ -187,6 +209,7 @@ Pak stačí:
 ```
 ./scripts/logs.sh [workspace]
 ./scripts/logs.sh [workspace] bot
+./scripts/logs.sh [workspace] slack
 ./scripts/logs.sh [workspace] scheduler
 ```
 
@@ -194,6 +217,11 @@ Pak stačí:
   - ověř `TELEGRAM_TOKEN` v `.env`
   - ověř `ALLOWED_USERS` (tvůj Telegram user ID) — prázdné znamená žádný přístup
   - zkontroluj `bot.log`
+
+- Slack nic nevrací:
+  - ověř `SLACK_BOT_TOKEN` a `SLACK_APP_TOKEN` v `.env`
+  - ověř `AIDE_SLACK_ALLOWED_USERS` (tvůj Slack user ID)
+  - zkontroluj `slack.log`
 
 - Scheduler neposílá připomínky:
   - ověř `AIDE_DEFAULT_CHAT_ID`

@@ -36,7 +36,7 @@ WORKSPACE=$(resolve_workspace "${1:-}")
 
 if [[ ! -d "$WORKSPACE" ]]; then
   echo "Workspace not found: $WORKSPACE" >&2
-  echo "Usage: ./scripts/logs.sh /path/to/workspace [bot|scheduler]" >&2
+  echo "Usage: ./scripts/logs.sh /path/to/workspace [bot|slack|scheduler]" >&2
   exit 1
 fi
 
@@ -45,8 +45,10 @@ TARGET=${2:-all}
 
 if [[ "$TARGET" == "bot" ]]; then
   tail -f "$LOG_DIR/bot.log"
+elif [[ "$TARGET" == "slack" ]]; then
+  tail -f "$LOG_DIR/slack.log"
 elif [[ "$TARGET" == "scheduler" ]]; then
   tail -f "$LOG_DIR/scheduler.log"
 else
-  tail -f "$LOG_DIR/bot.log" "$LOG_DIR/scheduler.log"
+  tail -f "$LOG_DIR/bot.log" "$LOG_DIR/slack.log" "$LOG_DIR/scheduler.log"
 fi

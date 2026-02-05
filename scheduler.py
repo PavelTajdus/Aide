@@ -74,8 +74,71 @@ def _cleanup_logs(workspace: Path, days: int = 14) -> None:
             continue
 
 
+def _heartbeat_soon_hours() -> int:
+    raw = os.environ.get("AIDE_HEARTBEAT_SOON_HOURS", "24").strip().lower()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 24
+    return max(1, value)
+
+
+def _format_task_line(task: Dict[str, Any], due_dt: datetime) -> str:
+    title = task.get("title") or "(untitled)"
+    project = task.get("project")
+    due_str = due_dt.isoformat()
+    if project:
+        return f"- {title} (due {due_str}, projekt: {project})"
+    return f"- {title} (due {due_str})"
+
+
+def _execute_heartbeat_job(workspace: Path) -> None:
+    tasks_path = workspace / "data" / "tasks.json"
+    overdue: List[Dict[str, Any]] = []
+    upcoming: List[Dict[str, Any]] = []
+    now = datetime.now()
+    soon_hours = _heartbeat_soon_hours()
+    soon_cutoff = now + timedelta(hours=soon_hours)
+
+    with file_lock(tasks_path):
+        tasks: List[Dict[str, Any]] = load_json(tasks_path, [])
+        for task in tasks:
+            if task.get("status") == "completed":
+                continue
+            due_dt = parse_dt(task.get("due"))
+            if not due_dt:
+                continue
+            if due_dt <= now:
+                overdue.append({"due": due_dt, "task": task})
+            elif due_dt <= soon_cutoff:
+                upcoming.append({"due": due_dt, "task": task})
+
+    if not overdue and not upcoming:
+        _log_line(workspace, "Heartbeat: nothing to report")
+        return
+
+    overdue.sort(key=lambda item: item["due"])
+    upcoming.sort(key=lambda item: item["due"])
+
+    lines: List[str] = []
+    if overdue:
+        lines.append(f"Overdue ({len(overdue)}):")
+        lines.extend(_format_task_line(item["task"], item["due"]) for item in overdue)
+    if upcoming:
+        lines.append(f"Blížící se do {soon_hours}h ({len(upcoming)}):")
+        lines.extend(_format_task_line(item["task"], item["due"]) for item in upcoming)
+
+    try:
+        send_message("\n".join(lines))
+    except Exception as exc:
+        _log_line(workspace, f"Heartbeat failed: {exc}")
+
+
 def _execute_cron_job(workspace: Path, job_id: Optional[str], prompt: str) -> None:
     try:
+        if job_id == "heartbeat":
+            _execute_heartbeat_job(workspace)
+            return
         answer, _sid, _tool_log = run_agent(prompt, working_dir=workspace)
         send_message(answer)
     except Exception as exc:
