@@ -71,26 +71,60 @@ def _extract_text(evt: Event) -> Optional[str]:
     return None
 
 
-def _extract_tool_names(evt: Event) -> List[str]:
-    names: List[str] = []
+ToolInfo = Dict[str, object]
+
+
+def _extract_tool_info(block: Dict) -> Optional[ToolInfo]:
+    """Extract tool name and input from a tool_use block."""
+    name = block.get("name") or block.get("tool_name") or block.get("tool")
+    if not isinstance(name, str):
+        return None
+    return {"name": name, "input": block.get("input", {})}
+
+
+def _extract_tools_from_event(evt: Event) -> List[ToolInfo]:
+    """Extract all tool info from an event."""
+    tools: List[ToolInfo] = []
+    seen_names: set = set()
+
+    # Check message.content for tool_use blocks (Claude CLI format)
+    message = evt.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    info = _extract_tool_info(block)
+                    if info and info["name"] not in seen_names:
+                        tools.append(info)
+                        seen_names.add(info["name"])
+
+    # Check for tool_use key directly
     tool_use = evt.get("tool_use")
     if isinstance(tool_use, dict):
-        name = tool_use.get("name") or tool_use.get("tool_name") or tool_use.get("tool")
-        if isinstance(name, str):
-            names.append(name)
+        info = _extract_tool_info(tool_use)
+        if info and info["name"] not in seen_names:
+            tools.append(info)
+            seen_names.add(info["name"])
     elif isinstance(tool_use, list):
         for item in tool_use:
             if isinstance(item, dict):
-                name = item.get("name") or item.get("tool_name") or item.get("tool")
-                if isinstance(name, str):
-                    names.append(name)
+                info = _extract_tool_info(item)
+                if info and info["name"] not in seen_names:
+                    tools.append(info)
+                    seen_names.add(info["name"])
 
-    # Some event formats may use top-level name/type
-    name = evt.get("name") or evt.get("tool_name") or evt.get("tool")
-    if isinstance(name, str) and name not in names:
-        names.append(name)
+    # Check for content blocks with tool_use type at top level
+    content = evt.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                info = _extract_tool_info(block)
+                if info and info["name"] not in seen_names:
+                    tools.append(info)
+                    seen_names.add(info["name"])
 
-    return names
+    return tools
 
 
 def run_agent(
@@ -99,7 +133,7 @@ def run_agent(
     working_dir: Optional[Path] = None,
     timeout_s: int = 300,
     process_cb: Optional[Callable[[subprocess.Popen], None]] = None,
-    tool_cb: Optional[Callable[[str], None]] = None,
+    tool_cb: Optional[Callable[[str, Dict], None]] = None,
 ) -> Tuple[str, Optional[str], List[Event]]:
     if working_dir is None:
         working_dir = resolve_workspace()
@@ -167,40 +201,14 @@ def run_agent(
         if text:
             assistant_chunks.append(text)
 
-        # Detect tool use from various event formats
-        tool_detected = False
-        tool_names_found = []
+        # Detect and extract tool use info
+        tools_found = _extract_tools_from_event(evt)
 
-        # Check message.content for tool_use blocks (Claude CLI format)
-        message = evt.get("message")
-        if isinstance(message, dict):
-            content = message.get("content")
-            if isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "tool_use":
-                        tool_detected = True
-                        name = block.get("name")
-                        if name and name not in tool_names_found:
-                            tool_names_found.append(name)
-
-        # Check for tool_use key directly
-        if not tool_detected and "tool_use" in evt:
-            tool_detected = True
-            tool_names_found = _extract_tool_names(evt)
-
-        # Check for content blocks with tool_use type at top level
-        if not tool_detected and isinstance(evt.get("content"), list):
-            for block in evt["content"]:
-                if isinstance(block, dict) and block.get("type") == "tool_use":
-                    tool_detected = True
-                    if block.get("name"):
-                        tool_names_found.append(block["name"])
-
-        if tool_detected:
+        if tools_found:
             tool_log.append(evt)
-            if tool_cb and tool_names_found:
-                for name in tool_names_found:
-                    tool_cb(name)
+            if tool_cb:
+                for tool_info in tools_found:
+                    tool_cb(tool_info["name"], tool_info.get("input", {}))
 
         if etype in ("result", "final", "message_stop"):
             text = _extract_text(evt)

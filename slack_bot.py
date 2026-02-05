@@ -182,17 +182,87 @@ def _format_thread_context(history: list[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _progress_text(tool_name: str) -> str:
+def _truncate(text: str, max_len: int = 60) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
+def _progress_text(tool_name: str, tool_input: Optional[Dict[str, Any]] = None) -> str:
     name = tool_name.lower()
-    if "web" in name or "search" in name:
-        return "Hledám na webu…"
-    if "bash" in name or "shell" in name:
-        return "Spouštím příkaz…"
-    if "read" in name:
-        return "Načítám kontext…"
-    if "write" in name or "edit" in name:
-        return "Upravuji soubory…"
-    return "Pracuji…"
+    inp = tool_input or {}
+
+    # WebFetch - show URL
+    if name == "webfetch":
+        url = inp.get("url", "")
+        if url:
+            # Strip protocol for brevity
+            url = re.sub(r"^https?://", "", url)
+            return f"🌐 WebFetch: {_truncate(url)}"
+        return "🌐 WebFetch…"
+
+    # WebSearch - show query
+    if name == "websearch":
+        query = inp.get("query", "")
+        if query:
+            return f"🔍 WebSearch: {_truncate(query)}"
+        return "🔍 WebSearch…"
+
+    # Read - show file path
+    if name == "read":
+        path = inp.get("file_path", "")
+        if path:
+            # Show just filename or last part of path
+            short = Path(path).name if "/" in path else path
+            return f"📖 Read: {_truncate(short, 50)}"
+        return "📖 Read…"
+
+    # Write - show file path
+    if name == "write":
+        path = inp.get("file_path", "")
+        if path:
+            short = Path(path).name if "/" in path else path
+            return f"✏️ Write: {_truncate(short, 50)}"
+        return "✏️ Write…"
+
+    # Edit - show file path
+    if name == "edit":
+        path = inp.get("file_path", "")
+        if path:
+            short = Path(path).name if "/" in path else path
+            return f"✏️ Edit: {_truncate(short, 50)}"
+        return "✏️ Edit…"
+
+    # Bash - show command
+    if name == "bash":
+        cmd = inp.get("command", "")
+        if cmd:
+            return f"💻 Bash: {_truncate(cmd)}"
+        return "💻 Bash…"
+
+    # Grep - show pattern
+    if name == "grep":
+        pattern = inp.get("pattern", "")
+        if pattern:
+            return f"🔎 Grep: {_truncate(pattern)}"
+        return "🔎 Grep…"
+
+    # Glob - show pattern
+    if name == "glob":
+        pattern = inp.get("pattern", "")
+        if pattern:
+            return f"📁 Glob: {_truncate(pattern)}"
+        return "📁 Glob…"
+
+    # Task - show description
+    if name == "task":
+        desc = inp.get("description", "")
+        if desc:
+            return f"🤖 Task: {_truncate(desc)}"
+        return "🤖 Task…"
+
+    # Generic fallback
+    return f"⚙️ {tool_name}…"
 
 
 def _download_file(
@@ -389,13 +459,13 @@ def _process_message(
         )
         progress_thread.start()
 
-        def _tool_cb(name: str) -> None:
+        def _tool_cb(name: str, inp: Dict[str, Any]) -> None:
             if not progress_q:
                 return
-            progress_q.put(_progress_text(name))
+            progress_q.put(_progress_text(name, inp))
     else:
 
-        def _tool_cb(name: str) -> None:
+        def _tool_cb(name: str, inp: Dict[str, Any]) -> None:
             return
 
     try:
