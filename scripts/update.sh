@@ -41,6 +41,11 @@ for skill in "$ENGINE_DIR/default_skills"/*.md; do
   ln -sfn "$skill" "$target"
 done
 
+# Remove broken skill symlinks (deleted from engine)
+for link in "$WORKSPACE/.claude/skills"/*.md; do
+  [[ -L "$link" ]] && [[ ! -e "$link" ]] && rm "$link"
+done
+
 mkdir -p "$WORKSPACE/data"
 echo "$ENGINE_VERSION" > "$WORKSPACE_VERSION_FILE"
 
