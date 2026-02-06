@@ -1,4 +1,6 @@
 import argparse
+import hashlib
+import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -92,8 +94,18 @@ def _format_task_line(task: Dict[str, Any], due_dt: datetime) -> str:
     return f"- {title} (due {due_str})"
 
 
+def _heartbeat_state_hash(overdue: List[Dict[str, Any]], upcoming: List[Dict[str, Any]]) -> str:
+    """Create a hash of the current heartbeat state for dedup."""
+    ids = sorted(
+        item["task"].get("id", item["task"].get("title", ""))
+        for item in overdue + upcoming
+    )
+    return hashlib.md5(json.dumps(ids).encode()).hexdigest()
+
+
 def _execute_heartbeat_job(workspace: Path) -> None:
     tasks_path = workspace / "data" / "tasks.json"
+    heartbeat_path = workspace / "data" / "last_heartbeat.json"
     overdue: List[Dict[str, Any]] = []
     upcoming: List[Dict[str, Any]] = []
     now = datetime.now()
@@ -117,6 +129,22 @@ def _execute_heartbeat_job(workspace: Path) -> None:
         _log_line(workspace, "Heartbeat: nothing to report")
         return
 
+    # Dedup: skip if same tasks were already reported today
+    state_hash = _heartbeat_state_hash(overdue, upcoming)
+    last_hb: Dict[str, Any] = {}
+    try:
+        last_hb = json.loads(heartbeat_path.read_text()) if heartbeat_path.exists() else {}
+    except Exception:
+        pass
+
+    last_hash = last_hb.get("hash")
+    last_date = last_hb.get("date")
+    today = now.date().isoformat()
+
+    if last_hash == state_hash and last_date == today:
+        _log_line(workspace, "Heartbeat: already reported today, skipping")
+        return
+
     overdue.sort(key=lambda item: item["due"])
     upcoming.sort(key=lambda item: item["due"])
 
@@ -130,6 +158,12 @@ def _execute_heartbeat_job(workspace: Path) -> None:
 
     try:
         send_message("\n".join(lines))
+        # Save state so we don't repeat today with same tasks
+        heartbeat_path.write_text(json.dumps({
+            "hash": state_hash,
+            "date": today,
+            "sent_at": now.isoformat(),
+        }))
     except Exception as exc:
         _log_line(workspace, f"Heartbeat failed: {exc}")
 
