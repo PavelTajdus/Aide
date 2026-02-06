@@ -152,4 +152,9 @@ fi
 systemctl start aide-scheduler.service
 echo "aide-scheduler started"
 
+# Daily auto-update cron (3:55 AM — git pull + update workspace + restart)
+CRON_LINE="55 3 * * * $AIDE_ENGINE/scripts/deploy.sh $AIDE_WORKSPACE >> $AIDE_WORKSPACE/data/logs/deploy.log 2>&1"
+(crontab -u "$AIDE_USER" -l 2>/dev/null | grep -v 'deploy\.sh\|restart\.sh\|claude update' || true; echo "$CRON_LINE") | crontab -u "$AIDE_USER" -
+echo "Daily auto-update cron installed (3:55 AM)"
+
 echo "Done."

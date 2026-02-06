@@ -80,6 +80,21 @@ PYTHON_BIN=/opt/aide/venv/bin/python ./scripts/run.sh /opt/aide/workspace
 
 Poznámka: Pokud spouštíš přes `sudo`, pip instaluje balíčky do root prostředí.
 
+### Automatické aktualizace
+
+`install_vps.sh` automaticky nastaví cron job, který každý den ve 3:55 spustí `deploy.sh`:
+
+```
+55 3 * * * /opt/aide/engine/scripts/deploy.sh /opt/aide/workspace >> /opt/aide/workspace/data/logs/deploy.log 2>&1
+```
+
+`deploy.sh` provede: git pull → pip install → update workspace (symlinky, skills, verze) → restart služeb.
+
+Pro ruční deploy:
+```
+/opt/aide/engine/scripts/deploy.sh /opt/aide/workspace
+```
+
 ## Workspace — jak to funguje
 
 Workspace je **oddělený od engine repa** a obsahuje tvoje osobní data.
@@ -89,16 +104,21 @@ Typická struktura:
 ~/aide-workspace/
 ├── .env
 ├── CLAUDE.md
-├── .claude/skills/
-├── tools/
+├── .claude/skills/       → symlinky na engine/default_skills/
+├── core_tools/           → symlink na engine/core_tools/
+├── tools/                → custom nástroje (user-defined)
+├── knowledge/
 ├── data/
 │   ├── sessions.json
 │   ├── sessions_slack.json
 │   ├── cron.json
 │   ├── tasks.json
 │   ├── projects.json
+│   ├── memory.json
+│   ├── engine_version
 │   ├── logs/
 │   └── journal/
+├── conversations/
 └── inbox/
 ```
 
@@ -121,9 +141,14 @@ Typická struktura:
 ./scripts/stop.sh [workspace]
 ```
 
-- Restart:
+- Restart (+ claude update):
 ```
 ./scripts/restart.sh [workspace]
+```
+
+- Deploy (git pull + pip + update workspace + restart):
+```
+./scripts/deploy.sh [workspace]
 ```
 
 - Status:
@@ -150,7 +175,7 @@ Typická struktura:
 ## Poznámky
 
 - Workspace **nikdy** nepatří do git repa enginu.
-- Core tools jsou v enginu (`core_tools/`) a do workspace se symlinkují.
+- Core tools (`core_tools/`) i default skills (`default_skills/`) se do workspace symlinkují — aktualizují se automaticky při deploy.
 - Telegram output je defaultně plain text. Lze přepnout na MarkdownV2 přes `AIDE_TELEGRAM_PARSE_MODE=markdown_v2`.
 - Escape režim pro MarkdownV2: `AIDE_TELEGRAM_ESCAPE=none|aggressive`.
 - Stavové updaty během běhu: `AIDE_TELEGRAM_PROGRESS=1` (0 = vypnuto).
