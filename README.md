@@ -25,6 +25,16 @@ Osobní AI asistent, který běží na tvém serveru a komunikuje přes Telegram
 - [Claude Code CLI](https://claude.com/product/claude-code) nainstalovaný a v PATH (vyžaduje předplatné)
 - Telegram bot token a/nebo Slack app tokeny
 
+### Proč Claude a proč předplatné?
+
+Aide používá Claude Code CLI, které vyžaduje předplatné Anthropic (Pro/Max). Není to jen obchodní rozhodnutí — pro autonomního agenta s přístupem k nástrojům je kvalita modelu zásadní.
+
+**Spolehlivost při práci s nástroji.** Autonomní agent nepíše jen text — volá API, spouští skripty, zapisuje soubory. Slabší modely při tom častěji chybují, komolí syntaxi a nedokážou se zotavit z chyb. Komunita kolem OpenClaw (podobný open-source agent) zjistila, že degradace kvality mezi frontier a mid-tier modely není postupná — je to skok. Buď model zvládá spolehlivě řetězit nástroje, nebo ne.
+
+**Hlubší porozumění.** Při testování s výkonnými středními modely jsem opakovaně narážel na to, že si agent vymýšlel kontext — třeba při zapisování úkolů přidával informace, které nikdo neřekl, nebo překrucoval zadání. U osobního asistenta, kterému důvěřuješ a spoléháš se na něj, si tohle nemůžeš dovolit.
+
+**Bezpečnost.** Agent s přístupem k souborům, shellu a API potřebuje odolnost proti prompt injection. OpenClaw ve své bezpečnostní dokumentaci přímo varuje před nasazením slabších modelů pro agenty s nástroji — úspěšný prompt injection útok má dopad na všechno, k čemu má agent přístup.
+
 ## Instalace
 
 ### VPS (doporučeno)
