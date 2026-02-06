@@ -18,6 +18,7 @@ from agent import run_agent, get_session_usage
 from config import load_workspace_env, resolve_workspace
 from core_tools._utils import atomic_write_json, file_lock, load_json
 from markdown_to_mrkdwn import SlackMarkdownConverter
+from context import recall_memory
 
 _mrkdwn_converter = SlackMarkdownConverter()
 
@@ -511,6 +512,12 @@ def _process_message(
         return
 
     session_id = _get_session_id(workspace, channel_id, thread_root)
+
+    # Auto-recall memory context for new sessions
+    if not session_id:
+        memory_context = recall_memory(workspace, text)
+        if memory_context:
+            prompt = f"{memory_context}\n\n{prompt}"
 
     key = _session_key(channel_id, thread_root)
 

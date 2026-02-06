@@ -13,6 +13,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Messa
 
 from agent import run_agent
 from config import get_allowed_users, load_workspace_env, resolve_workspace
+from context import recall_memory
 from core_tools._utils import atomic_write_json, file_lock, load_json
 
 
@@ -243,6 +244,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     thinking = await message.reply_text("Přemýšlím...")
 
     session_id = _get_session_id(workspace, update.effective_chat.id)
+
+    # Auto-recall memory context for new sessions
+    if not session_id:
+        memory_context = recall_memory(workspace, prompt)
+        if memory_context:
+            prompt = f"{memory_context}\n\n{prompt}"
 
     def _process_cb(proc):
         RUNNING[update.effective_chat.id] = proc
