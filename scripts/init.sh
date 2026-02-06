@@ -92,7 +92,7 @@ except Exception:
 if not any(j.get("id") == "heartbeat" for j in jobs):
     jobs.append({
         "id": "heartbeat",
-        "schedule": "0 */3 * * *",
+        "schedule": "*/30 * * * *",
         "prompt": "Heartbeat check. Zkontroluj overdue tasky a blížící se deadliny. Buď stručný.",
         "enabled": True,
         "created": datetime.now().isoformat(),

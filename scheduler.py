@@ -94,6 +94,12 @@ def _format_task_line(task: Dict[str, Any], due_dt: datetime) -> str:
     return f"- {title} (due {due_str})"
 
 
+def _heartbeat_hours() -> tuple:
+    start = int(os.environ.get("AIDE_HEARTBEAT_START_HOUR", "8"))
+    end = int(os.environ.get("AIDE_HEARTBEAT_END_HOUR", "22"))
+    return start, end
+
+
 def _heartbeat_state_hash(overdue: List[Dict[str, Any]], upcoming: List[Dict[str, Any]]) -> str:
     """Create a hash of the current heartbeat state for dedup."""
     ids = sorted(
@@ -104,6 +110,12 @@ def _heartbeat_state_hash(overdue: List[Dict[str, Any]], upcoming: List[Dict[str
 
 
 def _execute_heartbeat_job(workspace: Path) -> None:
+    now_hour = datetime.now().hour
+    start_hour, end_hour = _heartbeat_hours()
+    if now_hour < start_hour or now_hour >= end_hour:
+        _log_line(workspace, f"Heartbeat: outside working hours ({start_hour}-{end_hour}), skipping")
+        return
+
     tasks_path = workspace / "data" / "tasks.json"
     heartbeat_path = workspace / "data" / "last_heartbeat.json"
     overdue: List[Dict[str, Any]] = []
