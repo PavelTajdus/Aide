@@ -11,6 +11,10 @@ fi
 
 if is_systemd_mode; then
   WORKSPACE=$(resolve_workspace "${1:-}")
+
+  # Kill any orphan processes from manual runs
+  kill_stray_aide_processes
+
   echo "Restarting Aide services (systemd)..."
 
   # Scheduler always runs

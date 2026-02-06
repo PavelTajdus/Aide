@@ -61,6 +61,36 @@ telegram_configured () {
   [[ -n "$token" && "$token" != "YOUR_TELEGRAM_BOT_TOKEN" && -n "$allowed" ]]
 }
 
+kill_stray_aide_processes () {
+  # Kill any orphan Aide Python processes not managed by systemd.
+  # This prevents duplicate processes after manual runs from terminal.
+  local scripts=("main.py" "slack_bot.py" "scheduler.py")
+  local killed=0
+  for script in "${scripts[@]}"; do
+    local pids
+    pids=$(pgrep -f "python.*${script}.*--workspace" 2>/dev/null || true)
+    for pid in $pids; do
+      # Skip if managed by systemd (ppid=1 with systemd unit)
+      local service_pid
+      service_pid=$(systemctl show "aide-${script%%.*}" --property=MainPID --value 2>/dev/null || echo "0")
+      # Map script name to service: main.py→aide-bot, slack_bot.py→aide-slack, scheduler.py→aide-scheduler
+      case "$script" in
+        main.py)       service_pid=$(systemctl show aide-bot --property=MainPID --value 2>/dev/null || echo "0") ;;
+        slack_bot.py)  service_pid=$(systemctl show aide-slack --property=MainPID --value 2>/dev/null || echo "0") ;;
+        scheduler.py)  service_pid=$(systemctl show aide-scheduler --property=MainPID --value 2>/dev/null || echo "0") ;;
+      esac
+      if [[ "$pid" != "$service_pid" ]]; then
+        echo "Killing stray $script (pid $pid)"
+        kill "$pid" 2>/dev/null || true
+        killed=$((killed + 1))
+      fi
+    done
+  done
+  if [[ $killed -gt 0 ]]; then
+    sleep 1
+  fi
+}
+
 slack_configured () {
   local env_file="${1:-.env}"
   [[ -f "$env_file" ]] || return 1

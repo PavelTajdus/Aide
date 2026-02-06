@@ -51,3 +51,6 @@ stop_proc () {
 stop_proc "bot"
 stop_proc "slack"
 stop_proc "scheduler"
+
+# Also kill any orphan processes not tracked by PID files
+kill_stray_aide_processes
