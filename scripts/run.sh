@@ -1,51 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENGINE_DIR=$(cd "$(dirname "$0")/.." && pwd)
-PYTHON_BIN=${PYTHON_BIN:-python3}
+source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 
-resolve_workspace () {
-  local arg=${1:-}
-  if [[ -n "$arg" ]]; then
-    $PYTHON_BIN - <<PY
-import os
-print(os.path.abspath(os.path.expanduser("$arg")))
-PY
-    return
-  fi
-
-  if [[ -n "${AIDE_WORKSPACE:-}" ]]; then
-    $PYTHON_BIN - <<PY
-import os
-print(os.path.abspath(os.path.expanduser("${AIDE_WORKSPACE}")))
-PY
-    return
-  fi
-
-  if [[ -f "CLAUDE.md" || -d "data" ]]; then
-    pwd
-    return
-  fi
-
-  if [[ -d "$ENGINE_DIR/../workspace" ]]; then
-    $PYTHON_BIN - <<PY
-import os
-print(os.path.abspath(os.path.expanduser("$ENGINE_DIR/../workspace")))
-PY
-    return
-  fi
-
-  $PYTHON_BIN - <<PY
-import os
-print(os.path.abspath(os.path.expanduser("~/aide-workspace")))
-PY
-}
+if is_systemd_mode; then
+  echo "Aide services managed by systemd. Use: scripts/restart.sh" >&2
+  exit 1
+fi
 
 WORKSPACE=$(resolve_workspace "${1:-}")
 
 if [[ ! -d "$WORKSPACE" ]]; then
   echo "Workspace not found: $WORKSPACE" >&2
-  echo "Usage: ./scripts/run.sh /path/to/workspace" >&2
+  echo "Usage: ./scripts/run.sh [/path/to/workspace]" >&2
   exit 1
 fi
 
@@ -65,6 +32,9 @@ start_proc () {
       echo "$name already running (pid $pid)"
       return
     fi
+    # Stale PID file — process is dead
+    rm -f "$pid_file"
+    echo "$name: removed stale pid file"
   fi
 
   echo "Starting $name..."
@@ -73,27 +43,16 @@ start_proc () {
   echo "$name started (pid $(cat "$pid_file"))"
 }
 
-telegram_enabled=$(grep -E "^AIDE_TELEGRAM_ENABLED=" "$WORKSPACE/.env" | cut -d= -f2- || true)
-telegram_token=$(grep -E "^TELEGRAM_TOKEN=" "$WORKSPACE/.env" | cut -d= -f2- || true)
-
-if [[ "${telegram_enabled,,}" != "0" && "${telegram_enabled,,}" != "false" && "${telegram_enabled,,}" != "no" ]]; then
-  if [[ -n "$telegram_token" && "$telegram_token" != "YOUR_TELEGRAM_BOT_TOKEN" ]]; then
-    start_proc "bot" "$PYTHON_BIN \"$ENGINE_DIR/main.py\" --workspace \"$WORKSPACE\""
-  else
-    echo "Telegram not configured (missing TELEGRAM_TOKEN); skipping telegram bot."
-  fi
+if telegram_configured "$WORKSPACE/.env"; then
+  start_proc "bot" "$PYTHON_BIN \"$ENGINE_DIR/main.py\" --workspace \"$WORKSPACE\""
+else
+  echo "Telegram not configured; skipping telegram bot."
 fi
 
-slack_enabled=$(grep -E "^AIDE_SLACK_ENABLED=" "$WORKSPACE/.env" | cut -d= -f2- || true)
-slack_token=$(grep -E "^SLACK_BOT_TOKEN=" "$WORKSPACE/.env" | cut -d= -f2- || true)
-slack_app_token=$(grep -E "^SLACK_APP_TOKEN=" "$WORKSPACE/.env" | cut -d= -f2- || true)
-
-if [[ "${slack_enabled,,}" != "0" && "${slack_enabled,,}" != "false" && "${slack_enabled,,}" != "no" ]]; then
-  if [[ -n "$slack_token" && "$slack_token" != "YOUR_SLACK_BOT_TOKEN" && -n "$slack_app_token" && "$slack_app_token" != "YOUR_SLACK_APP_TOKEN" ]]; then
-    start_proc "slack" "$PYTHON_BIN \"$ENGINE_DIR/slack_bot.py\" --workspace \"$WORKSPACE\""
-  else
-    echo "Slack not configured (missing SLACK_BOT_TOKEN/SLACK_APP_TOKEN); skipping slack bot."
-  fi
+if slack_configured "$WORKSPACE/.env"; then
+  start_proc "slack" "$PYTHON_BIN \"$ENGINE_DIR/slack_bot.py\" --workspace \"$WORKSPACE\""
+else
+  echo "Slack not configured; skipping slack bot."
 fi
 
 start_proc "scheduler" "$PYTHON_BIN \"$ENGINE_DIR/scheduler.py\" --workspace \"$WORKSPACE\""

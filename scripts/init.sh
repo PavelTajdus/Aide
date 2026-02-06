@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "$0")" && pwd)/common.sh"
+
 WORKSPACE=${1:-}
 if [[ -z "$WORKSPACE" ]]; then
   echo "Usage: ./scripts/init.sh /path/to/workspace" >&2
   exit 1
 fi
 
-ENGINE_DIR=$(cd "$(dirname "$0")/.." && pwd)
-PYTHON_BIN=${PYTHON_BIN:-python3}
-WORKSPACE=$($PYTHON_BIN - <<PY
-import os
-print(os.path.abspath(os.path.expanduser("$WORKSPACE")))
-PY
-)
+WORKSPACE=$($PYTHON_BIN -c "import os; print(os.path.abspath(os.path.expanduser('$WORKSPACE')))")
 ENGINE_VERSION=$(cat "$ENGINE_DIR/VERSION")
 
 mkdir -p "$WORKSPACE" \

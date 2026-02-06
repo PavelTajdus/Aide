@@ -1,56 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PYTHON_BIN=${PYTHON_BIN:-python3}
-ENGINE_DIR=$(cd "$(dirname "$0")/.." && pwd)
+source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 
-resolve_workspace () {
-  local arg=${1:-}
-  if [[ -n "$arg" ]]; then
-    $PYTHON_BIN - <<PY
-import os
-print(os.path.abspath(os.path.expanduser("$arg")))
-PY
-    return
-  fi
+TARGET=${2:-all}
 
-  if [[ -n "${AIDE_WORKSPACE:-}" ]]; then
-    $PYTHON_BIN - <<PY
-import os
-print(os.path.abspath(os.path.expanduser("${AIDE_WORKSPACE}")))
-PY
-    return
-  fi
-
-  if [[ -f "CLAUDE.md" || -d "data" ]]; then
-    pwd
-    return
-  fi
-
-  if [[ -d "$ENGINE_DIR/../workspace" ]]; then
-    $PYTHON_BIN - <<PY
-import os
-print(os.path.abspath(os.path.expanduser("$ENGINE_DIR/../workspace")))
-PY
-    return
-  fi
-
-  $PYTHON_BIN - <<PY
-import os
-print(os.path.abspath(os.path.expanduser("~/aide-workspace")))
-PY
-}
+if is_systemd_mode; then
+  case "$TARGET" in
+    bot)       exec journalctl -u aide-bot -f ;;
+    slack)     exec journalctl -u aide-slack -f ;;
+    scheduler) exec journalctl -u aide-scheduler -f ;;
+    *)         exec journalctl -u 'aide-*' -f ;;
+  esac
+fi
 
 WORKSPACE=$(resolve_workspace "${1:-}")
 
 if [[ ! -d "$WORKSPACE" ]]; then
   echo "Workspace not found: $WORKSPACE" >&2
-  echo "Usage: ./scripts/logs.sh /path/to/workspace [bot|slack|scheduler]" >&2
+  echo "Usage: ./scripts/logs.sh [/path/to/workspace] [bot|slack|scheduler]" >&2
   exit 1
 fi
 
 LOG_DIR="$WORKSPACE/data/logs"
-TARGET=${2:-all}
 
 if [[ "$TARGET" == "bot" ]]; then
   tail -f "$LOG_DIR/bot.log"

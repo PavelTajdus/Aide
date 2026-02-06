@@ -1,19 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WORKSPACE=${1:-}
-if [[ -z "$WORKSPACE" ]]; then
-  echo "Usage: ./scripts/update.sh /path/to/workspace" >&2
+source "$(cd "$(dirname "$0")" && pwd)/common.sh"
+
+WORKSPACE=$(resolve_workspace "${1:-}")
+
+if [[ ! -d "$WORKSPACE" ]]; then
+  echo "Workspace not found: $WORKSPACE" >&2
+  echo "Usage: ./scripts/update.sh [/path/to/workspace]" >&2
   exit 1
 fi
-
-ENGINE_DIR=$(cd "$(dirname "$0")/.." && pwd)
-PYTHON_BIN=${PYTHON_BIN:-python3}
-WORKSPACE=$($PYTHON_BIN - <<PY
-import os
-print(os.path.abspath(os.path.expanduser("$WORKSPACE")))
-PY
-)
 
 ENGINE_VERSION=$(cat "$ENGINE_DIR/VERSION")
 WORKSPACE_VERSION_FILE="$WORKSPACE/data/engine_version"

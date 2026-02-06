@@ -41,18 +41,31 @@ if [[ ! -d "$AIDE_ENGINE/.git" ]]; then
     cp -a "$ENGINE_SRC" "$AIDE_ENGINE"
   fi
 else
-  echo "Engine already present at $AIDE_ENGINE"
+  echo "Engine already present at $AIDE_ENGINE — pulling latest..."
+  git -C "$AIDE_ENGINE" pull
 fi
 
 echo "Initializing workspace at $AIDE_WORKSPACE"
 "$AIDE_ENGINE/scripts/init.sh" "$AIDE_WORKSPACE"
 
+# Update workspace (symlinks, skills, version)
+"$AIDE_ENGINE/scripts/update.sh" "$AIDE_WORKSPACE"
+
 echo "Creating venv at $AIDE_BASE/venv"
 python3 -m venv "$AIDE_BASE/venv"
-"$AIDE_BASE/venv/bin/pip" install -r "$AIDE_ENGINE/requirements.txt"
+"$AIDE_BASE/venv/bin/pip" install --upgrade -r "$AIDE_ENGINE/requirements.txt"
 
 echo "Fixing ownership for $AIDE_USER"
 chown -R "$AIDE_USER:$AIDE_USER" "$AIDE_BASE"
+
+# Sudoers rule: allow aide user to manage aide services without password
+SUDOERS_FILE="/etc/sudoers.d/aide"
+echo "$AIDE_USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl start aide-*, /usr/bin/systemctl stop aide-*, /usr/bin/systemctl restart aide-*" > "$SUDOERS_FILE"
+chmod 440 "$SUDOERS_FILE"
+echo "Sudoers rule installed at $SUDOERS_FILE"
+
+# Source common.sh for telegram_configured/slack_configured helpers
+source "$AIDE_ENGINE/scripts/common.sh"
 
 echo "Installing systemd services"
 cat > /etc/systemd/system/aide-bot.service <<EOF
@@ -121,40 +134,22 @@ EOF
 systemctl daemon-reload
 systemctl enable aide-bot.service aide-slack.service aide-scheduler.service
 
-token=$(grep -E "^TELEGRAM_TOKEN=" "$AIDE_WORKSPACE/.env" | cut -d= -f2- || true)
-allowed=$(grep -E "^ALLOWED_USERS=" "$AIDE_WORKSPACE/.env" | cut -d= -f2- || true)
-telegram_enabled=$(grep -E "^AIDE_TELEGRAM_ENABLED=" "$AIDE_WORKSPACE/.env" | cut -d= -f2- || true)
-slack_token=$(grep -E "^SLACK_BOT_TOKEN=" "$AIDE_WORKSPACE/.env" | cut -d= -f2- || true)
-slack_app_token=$(grep -E "^SLACK_APP_TOKEN=" "$AIDE_WORKSPACE/.env" | cut -d= -f2- || true)
-slack_enabled=$(grep -E "^AIDE_SLACK_ENABLED=" "$AIDE_WORKSPACE/.env" | cut -d= -f2- || true)
-
-started_any=0
-
-if [[ "${telegram_enabled,,}" != "0" && "${telegram_enabled,,}" != "false" && "${telegram_enabled,,}" != "no" ]]; then
-  if [[ -n "$token" && "$token" != "YOUR_TELEGRAM_BOT_TOKEN" && -n "$allowed" ]]; then
-    systemctl start aide-bot.service
-    started_any=1
-  else
-    echo "Telegram bot not started (missing TELEGRAM_TOKEN/ALLOWED_USERS)."
-  fi
-fi
-
-if [[ "${slack_enabled,,}" != "0" && "${slack_enabled,,}" != "false" && "${slack_enabled,,}" != "no" ]]; then
-  if [[ -n "$slack_token" && "$slack_token" != "YOUR_SLACK_BOT_TOKEN" && -n "$slack_app_token" && "$slack_app_token" != "YOUR_SLACK_APP_TOKEN" ]]; then
-    systemctl start aide-slack.service
-    started_any=1
-  else
-    echo "Slack bot not started (missing SLACK_BOT_TOKEN/SLACK_APP_TOKEN)."
-  fi
-fi
-
-if [[ "$started_any" -eq 1 ]]; then
-  systemctl start aide-scheduler.service
-  echo "Services started."
+if telegram_configured "$AIDE_WORKSPACE/.env"; then
+  systemctl start aide-bot.service
+  echo "aide-bot started"
 else
-  echo "Services enabled but not started."
-  echo "Please edit $AIDE_WORKSPACE/.env (TELEGRAM_TOKEN/ALLOWED_USERS or SLACK_BOT_TOKEN/SLACK_APP_TOKEN), then run:"
-  echo "  sudo systemctl start aide-bot.service aide-slack.service aide-scheduler.service"
+  echo "Telegram bot not started (not configured)."
 fi
+
+if slack_configured "$AIDE_WORKSPACE/.env"; then
+  systemctl start aide-slack.service
+  echo "aide-slack started"
+else
+  echo "Slack bot not started (not configured)."
+fi
+
+# Scheduler always starts
+systemctl start aide-scheduler.service
+echo "aide-scheduler started"
 
 echo "Done."
