@@ -40,7 +40,9 @@ Aide používá Claude Code CLI, které vyžaduje předplatné Anthropic (Pro/Ma
 ### VPS (doporučeno)
 
 ```bash
-sudo ./scripts/install_vps.sh
+sudo mkdir -p /opt/aide && cd /opt/aide
+git clone https://github.com/PavelTajdus/Aide engine
+sudo ./engine/scripts/install_vps.sh
 ```
 
 Skript nainstaluje závislosti, vytvoří venv, nastaví systemd services a denní auto-deploy.
