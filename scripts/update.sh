@@ -33,14 +33,12 @@ else
   ln -s "$ENGINE_DIR/core_tools" "$CORE_LINK"
 fi
 
-# Offer new default skills as *.new
+# Symlink default skills into workspace (overwrite copies with symlinks)
 mkdir -p "$WORKSPACE/.claude/skills"
 for skill in "$ENGINE_DIR/default_skills"/*.md; do
   name=$(basename "$skill")
   target="$WORKSPACE/.claude/skills/$name"
-  if [[ ! -f "$target" ]]; then
-    cp "$skill" "$target.new"
-  fi
+  ln -sfn "$skill" "$target"
 done
 
 mkdir -p "$WORKSPACE/data"

@@ -52,12 +52,11 @@ AIDE_CLAUDE_SKIP_PERMISSIONS=1
 ENV
 fi
 
+# Symlink default skills into workspace
 for skill in "$ENGINE_DIR/default_skills"/*.md; do
   name=$(basename "$skill")
   target="$WORKSPACE/.claude/skills/$name"
-  if [[ ! -f "$target" ]]; then
-    cp "$skill" "$target"
-  fi
+  ln -sfn "$skill" "$target"
 done
 
 if [[ ! -f "$WORKSPACE/data/sessions.json" ]]; then
