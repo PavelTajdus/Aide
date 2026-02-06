@@ -78,7 +78,6 @@ Co NEUKLÁDAT:
 ## Workspace structure
 
 ```
-/journal/       → denní záznamy (YYYY-MM-DD.md)
 /knowledge/     → trvalé znalosti (reference, research)
 /tasks/         → inbox a poznámky k úkolům
 /decisions/     → důležitá rozhodnutí

@@ -116,8 +116,7 @@ Typická struktura:
 │   ├── projects.json
 │   ├── memory.json
 │   ├── engine_version
-│   ├── logs/
-│   └── journal/
+│   └── logs/
 ├── conversations/
 └── inbox/
 ```
