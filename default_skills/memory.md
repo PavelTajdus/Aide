@@ -1,54 +1,54 @@
 # Skill: Memory
 
-## Kdy se aktivuje
+## When to activate
 
-### Ukládání (proaktivně, TIŠE — neoznamuj uživateli)
-Když v konverzaci zazní důležitý fakt, ulož ho BEZ ptaní:
-- Rozhodnutí ("přecenit Fiberlogy od 1.3.", "používáme Shopify pro EU")
-- Preference ("nechci emaily v pondělí ráno", "preferuji X před Y")
-- Kontakty a vztahy ("Kuba = spoluzakladatel Printerhive")
-- Stav projektů ("Sicca.cz ~70% hotovo")
-- Důležité termíny a čísla
-- Cokoliv co by mělo přežít mezi konverzacemi
+### Saving (proactively, SILENTLY — do not announce to user)
+When an important fact comes up in conversation, save it WITHOUT asking:
+- Decisions ("switch to Shopify for EU store", "use PostgreSQL for the new project")
+- Preferences ("no emails on Monday morning", "prefer X over Y")
+- Contacts and relationships ("Alex = co-founder of ProjectX")
+- Project status ("website redesign ~70% done")
+- Important deadlines and numbers
+- Anything that should survive between conversations
 
-### Vyhledávání (na začátku nového vlákna)
-Při první zprávě v novém vlákně/konverzaci:
-1. Prohledej memory podle klíčových slov z uživatelovy zprávy
-2. Pokud téma odpovídá souboru v `/knowledge/`, načti ho
-3. Použij nalezený kontext pro lepší odpověď
+### Searching (at the start of a new thread)
+On the first message in a new thread/conversation:
+1. Search memory for keywords from the user's message
+2. If the topic matches a file in `/knowledge/`, load it
+3. Use found context for a better response
 
-### Explicitní příkazy
-- "zapamatuj si", "remember", "paměť" → uložit
-- "co víš o...", "pamatuješ si..." → vyhledat
-- "zapomeň", "smaž z paměti" → forget
+### Explicit commands
+- "remember", "save to memory" → save
+- "what do you know about...", "do you remember..." → search
+- "forget", "delete from memory" → forget
 
-## Kroky
+## Steps
 
-### Uložení
+### Save
 ```
 python $AIDE_ENGINE/core_tools/memory_manage.py add --text "..."
 ```
 
-### Vyhledání
+### Search
 ```
 python $AIDE_ENGINE/core_tools/memory_manage.py search --query "..."
 ```
 
-### Seznam
+### List
 ```
 python $AIDE_ENGINE/core_tools/memory_manage.py list
 ```
 
-### Smazání
+### Delete
 ```
 python $AIDE_ENGINE/core_tools/memory_manage.py forget --id "UUID"
 ```
 
-## Co NEUKLÁDAT
-- Triviální fakta co jsou v CLAUDE.md
-- Dočasné věci ("dnes mám meeting v 15:00")
-- Duplicity — před uložením hledej jestli to už není v memory
+## What NOT to save
+- Trivial facts already in CLAUDE.md
+- Temporary things ("meeting today at 3pm")
+- Duplicates — search before saving to check if already in memory
 
-## Očekávaný výstup
-- Při ukládání: tiše uložit, nekomentovat (pokud to uživatel explicitně nežádal)
-- Při hledání: vrátit relevantní výsledky stručně
+## Expected output
+- When saving: save silently, do not comment (unless user explicitly asked)
+- When searching: return relevant results concisely

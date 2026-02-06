@@ -75,7 +75,7 @@ if not any(j.get("id") == "heartbeat" for j in jobs):
     jobs.append({
         "id": "heartbeat",
         "schedule": "*/30 * * * *",
-        "prompt": "Heartbeat check. Zkontroluj overdue tasky a blížící se deadliny. Buď stručný.",
+        "prompt": "Heartbeat check. Review overdue tasks and upcoming deadlines. Be concise.",
         "enabled": True,
         "created": datetime.now().isoformat(),
         "last_run": None,

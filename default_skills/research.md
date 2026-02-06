@@ -1,12 +1,12 @@
 # Skill: Research
 
-## Kdy se aktivuje
-- Uživatel žádá research, porovnání, souhrn, nejlepší praxi, doporučení.
+## When to activate
+- User requests research, comparison, summary, best practices, or recommendations.
 
-## Kroky
-1. Ujasni si zadání (scope, časové okno, výstup).
-2. Použij web search pouze pokud je potřeba aktuální informace.
-3. Výsledek shrň stručně, s jasnými závěry.
+## Steps
+1. Clarify the scope (topic, time range, desired output).
+2. Use web search only if up-to-date information is needed.
+3. Summarize results concisely with clear conclusions.
 
-## Očekávaný výstup
-- Strukturované body + doporučení.
+## Expected output
+- Structured bullet points + recommendations.

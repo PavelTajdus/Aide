@@ -1,49 +1,49 @@
 # Slack bot setup (Socket Mode)
 
-Krok za krokem:
+Step by step:
 
-1. Vytvoř Slack app
-- Otevři Slack API Apps.
-- Klikni "Create New App" -> "From scratch".
-- Zvol název a workspace.
+1. Create a Slack app
+- Open Slack API Apps.
+- Click "Create New App" -> "From scratch".
+- Choose a name and workspace.
 
-2. Zapni Socket Mode
-- V App settings zapni "Socket Mode".
-- Vytvoř App-Level Token s oprávněním `connections:write`.
-- Zkopíruj token (začínající `xapp-...`).
+2. Enable Socket Mode
+- In App settings, enable "Socket Mode".
+- Create an App-Level Token with `connections:write` scope.
+- Copy the token (starts with `xapp-...`).
 
-3. Nastav OAuth scopes pro bota
-- V "OAuth & Permissions" přidej Bot Token Scopes:
+3. Set up OAuth scopes for the bot
+- In "OAuth & Permissions", add Bot Token Scopes:
   - `app_mentions:read`
   - `chat:write`
   - `im:history`
   - `im:write`
   - `files:read`
-  - `channels:history` (nutné pro `AIDE_SLACK_AUTO_THREAD`)
-  - `groups:history` (nutné pro auto-thread v privátních kanálech)
+  - `channels:history` (required for `AIDE_SLACK_AUTO_THREAD`)
+  - `groups:history` (required for auto-thread in private channels)
 
-4. Zapni Event Subscriptions
-- Zapni "Event Subscriptions".
-- Přidej Bot Events:
+4. Enable Event Subscriptions
+- Enable "Event Subscriptions".
+- Add Bot Events:
   - `app_mention`
   - `message.im`
-  - `message.channels` (nutné pro `AIDE_SLACK_AUTO_THREAD`)
-  - `message.groups` (nutné pro auto-thread v privátních kanálech)
-Poznámka: Pokud Slack UI vyžaduje Request URL, použij vlastní veřejný endpoint pro ověření. Při Socket Mode se eventy doručují přes WebSocket.
+  - `message.channels` (required for `AIDE_SLACK_AUTO_THREAD`)
+  - `message.groups` (required for auto-thread in private channels)
+Note: If Slack UI requires a Request URL, use your own public endpoint for verification. With Socket Mode, events are delivered via WebSocket.
 
-5. Nainstaluj app do workspace
-- V "OAuth & Permissions" klikni "Install to Workspace".
-- Zkopíruj Bot User OAuth Token (začínající `xoxb-...`).
+5. Install app to workspace
+- In "OAuth & Permissions", click "Install to Workspace".
+- Copy the Bot User OAuth Token (starts with `xoxb-...`).
 
-6. Přidej bota do kanálu
-- V kanálu napiš `/invite @your-bot-name`.
+6. Add the bot to a channel
+- In the channel, type `/invite @your-bot-name`.
 
-7. Zjisti svoje Slack user ID
-- Klikni na svůj profil vpravo nahoře.
-- Zvol "Profil".
-- Klikni na tři tečky a zvol "Copy member ID".
+7. Get your Slack user ID
+- Click your profile in the top right.
+- Choose "Profile".
+- Click the three dots and select "Copy member ID".
 
-7. Nastav `.env` ve workspace
+8. Configure `.env` in your workspace
 ```
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
@@ -53,17 +53,17 @@ AIDE_SLACK_DEFAULT_TARGET=UXXXXXXX
 AIDE_SLACK_AUTO_THREAD=1
 AIDE_NOTIFY_PROVIDER=slack
 ```
-Poznámky:
-- `AIDE_SLACK_ALLOWED_USERS`: seznam Slack user ID oddělených čárkou.
-- `AIDE_SLACK_DEFAULT_TARGET`: `U...` pro DM, nebo `C.../G...` pro kanál.
-- Pokud chceš vynutit cíl, použij `AIDE_SLACK_DEFAULT_TARGET_TYPE=dm|channel`.
-- `AIDE_SLACK_AUTO_THREAD`: `1` = bot automaticky odpovídá ve vláknech bez nutnosti @zmínky (výchozí: `0`). Vyžaduje přidat event subscriptions `message.channels`/`message.groups` a scopes `channels:history`/`groups:history`.
+Notes:
+- `AIDE_SLACK_ALLOWED_USERS`: comma-separated list of Slack user IDs.
+- `AIDE_SLACK_DEFAULT_TARGET`: `U...` for DM, or `C.../G...` for a channel.
+- To force a target type, use `AIDE_SLACK_DEFAULT_TARGET_TYPE=dm|channel`.
+- `AIDE_SLACK_AUTO_THREAD`: `1` = bot automatically replies in threads without requiring @mention (default: `0`). Requires adding event subscriptions `message.channels`/`message.groups` and scopes `channels:history`/`groups:history`.
 
-8. Spusť bota
+9. Start the bot
 ```
 ./scripts/run.sh /path/to/workspace
 ```
 
 Troubleshooting:
-- `slack.log` v `data/logs/`.
-- Oprávnění chybně? Zkus znovu nainstalovat app (po změně scopes).
+- Check `slack.log` in `data/logs/`.
+- Wrong permissions? Try reinstalling the app (after changing scopes).

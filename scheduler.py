@@ -165,7 +165,7 @@ def _execute_heartbeat_job(workspace: Path) -> None:
         lines.append(f"Overdue ({len(overdue)}):")
         lines.extend(_format_task_line(item["task"], item["due"]) for item in overdue)
     if upcoming:
-        lines.append(f"Blížící se do {soon_hours}h ({len(upcoming)}):")
+        lines.append(f"Upcoming within {soon_hours}h ({len(upcoming)}):")
         lines.extend(_format_task_line(item["task"], item["due"]) for item in upcoming)
 
     try:
@@ -244,9 +244,9 @@ def _run_task_reminders(workspace: Path, now: datetime) -> None:
             if remind_at <= now:
                 title = task.get("title", "(untitled)")
                 project = task.get("project")
-                message = f"Připomínka: {title}"
+                message = f"Reminder: {title}"
                 if project:
-                    message += f" (projekt: {project})"
+                    message += f" (project: {project})"
                 due.append({"id": task.get("id"), "message": message})
 
     if not due:

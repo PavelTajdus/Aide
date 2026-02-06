@@ -1,14 +1,14 @@
 # Skill: Tasks
 
-## Kdy se aktivuje
-- Uživatel chce přidat, upravit, zobrazit nebo dokončit tasky.
-- Fráze: "přidej task", "to-do", "úkol", "remind", "připomínka".
+## When to activate
+- User wants to add, edit, view, or complete tasks.
+- Phrases: "add task", "to-do", "remind", "reminder".
 
-## Kroky
-1. Zjisti potřebné údaje: title, project (volitelně), due/remind/recurrence.
-2. Použij core tool `task_manage.py` (add/list/update/complete):
+## Steps
+1. Gather required info: title, project (optional), due/remind/recurrence.
+2. Use core tool `task_manage.py` (add/list/update/complete):
    `python $AIDE_ENGINE/core_tools/task_manage.py ...`
-3. Potvrď změny a případně navrhni další krok.
+3. Confirm changes and optionally suggest a next step.
 
-## Očekávaný výstup
-- Krátké potvrzení + shrnutí změny.
+## Expected output
+- Short confirmation + summary of the change.

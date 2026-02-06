@@ -143,7 +143,7 @@ def get_session_usage(
 
     load_workspace_env(working_dir)
 
-    cmd = ["claude", "-p", "--output-format", "json", "--resume", session_id, "Odpověz pouze: ok"]
+    cmd = ["claude", "-p", "--output-format", "json", "--resume", session_id, "Reply only: ok"]
     skip_perms = os.environ.get("AIDE_CLAUDE_SKIP_PERMISSIONS", "1").strip().lower()
     if skip_perms in ("1", "true", "yes", "on"):
         cmd.append("--dangerously-skip-permissions")

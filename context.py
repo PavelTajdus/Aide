@@ -6,23 +6,27 @@ from typing import List
 
 from core_tools._utils import load_json
 
-# Czech stop words + common short words to skip
+# Stop words for keyword extraction (English + Czech)
 _STOP_WORDS = {
+    # English
+    "the", "is", "it", "to", "and", "of", "in", "for", "on", "with",
+    "this", "that", "are", "was", "not", "but", "what", "how", "can",
+    "have", "has", "had", "will", "would", "could", "should", "been",
+    "from", "they", "them", "their", "there", "then", "than", "when",
+    "where", "which", "who", "whom", "whose", "some", "any", "all",
+    "each", "every", "both", "more", "most", "other", "into", "over",
+    "such", "only", "also", "just", "about", "very", "much", "many",
+    # Czech
     "a", "ale", "ani", "asi", "bez", "bude", "budu", "by", "byl", "byla",
     "byli", "bylo", "být", "co", "jak", "jako", "je", "jeho", "jej", "její",
     "jejich", "jen", "ještě", "jí", "jiné", "jsou", "jsem", "jsi", "jsme",
-    "jste", "k", "kam", "kde", "kdo", "když", "ke", "která", "které",
-    "který", "má", "mají", "mám", "máš", "máte", "mě", "mně", "moc",
-    "moje", "moji", "mohou", "moje", "možná", "můj", "musí", "může", "my",
-    "na", "nad", "nam", "nám", "naše", "ne", "nebo", "než", "nic", "no",
-    "od", "on", "ona", "oni", "ono", "pak", "po", "pod", "podle", "pro",
-    "proč", "proto", "protože", "před", "přes", "při", "s", "se", "si",
-    "snad", "tak", "také", "taky", "tam", "to", "toho", "tohle", "tom",
-    "tomu", "tu", "tuto", "tvoje", "tvůj", "ty", "tyto", "u", "už", "v",
-    "ve", "velmi", "vy", "z", "za", "ze", "že",
-    # English common
-    "the", "is", "it", "to", "and", "of", "in", "for", "on", "with",
-    "this", "that", "are", "was", "not", "but", "what", "how", "can",
+    "jste", "kam", "kde", "kdo", "když", "která", "které", "který",
+    "mají", "mám", "máš", "máte", "mně", "moc", "moje", "moji",
+    "mohou", "možná", "můj", "musí", "může", "nad", "nam", "nám",
+    "naše", "nebo", "než", "nic", "ona", "oni", "ono", "pak", "pod",
+    "podle", "pro", "proč", "proto", "protože", "před", "přes", "při",
+    "snad", "tak", "také", "taky", "tam", "toho", "tohle", "tom",
+    "tomu", "tuto", "tvoje", "tvůj", "tyto", "už", "velmi", "ze", "že",
 }
 
 MAX_RESULTS = 10
@@ -72,7 +76,7 @@ def recall_memory(workspace: Path, text: str) -> str:
     if not results:
         return ""
 
-    lines = ["[Kontext z paměti]"]
+    lines = ["[Memory context]"]
     total = 0
     for r in results:
         entry = f"- {r.get('text', '')}"

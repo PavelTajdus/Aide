@@ -1,12 +1,12 @@
 # Skill: Heartbeat
 
-## Kdy se aktivuje
-- Spouští se pravidelně přes cron (heartbeat job).
+## When to activate
+- Runs periodically via cron (heartbeat job).
 
-## Kroky
-1. Načti seznam tasků a detekuj overdue / blížící se deadlines.
-2. Pokud nic důležitého, buď stručný a klidný.
-3. Pokud je co řešit, navrhni konkrétní další krok.
+## Steps
+1. Load task list and detect overdue / upcoming deadlines.
+2. If nothing important, be brief and calm.
+3. If something needs attention, suggest a concrete next step.
 
-## Očekávaný výstup
-- Krátké shrnutí stavu + doporučené akce.
+## Expected output
+- Short status summary + recommended actions.

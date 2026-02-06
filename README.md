@@ -1,88 +1,106 @@
 # Aide
 
-Osobní AI asistent postavený nad Claude Code CLI. Aide funguje jako tvůj pobočník — komunikuješ s ním přes Telegram nebo Slack, on si pamatuje kontext, spravuje úkoly, plánuje připomínky a umí pracovat s vlastními nástroji. Běží jako služba na serveru nebo lokálně.
+A personal AI assistant that runs on your server and communicates via Telegram or Slack. Built on top of [Claude Code CLI](https://claude.com/product/claude-code) — it has access to the filesystem, can write and run code, search the web, and work with APIs. It's not a chatbot. It's a copilot that remembers, plans, and acts on its own.
 
-**Co umí:**
-- Konverzace přes Telegram a Slack (včetně vláken a příloh)
-- Dlouhodobá paměť — automaticky si ukládá a vybavuje důležité informace
-- Správa úkolů s prioritami, projekty a opakováním
-- Plánované úlohy (cron) — připomínky, denní přehledy, vlastní automatizace
-- Rozšiřitelnost přes vlastní nástroje (Python) a skills (Markdown)
+## What makes it more than a chatbot
 
-## Rychlý start
+**Memory.** Aide automatically saves important information — your decisions, preferences, contacts, project status. At the start of each new conversation, it retrieves relevant facts and uses them as context. You never have to repeat yourself.
 
-```bash
-./scripts/init.sh ~/aide-workspace
-```
+**Custom tools.** Aide can write Python scripts and use them as tools. Need an e-shop API integration? Auto-generated product descriptions? Competitor price monitoring? Tell it what you need, it writes a script, saves it to the workspace, and uses it from then on.
 
-Vyplň `~/aide-workspace/.env` — minimálně `TELEGRAM_TOKEN`, `ALLOWED_USERS`, `AIDE_DEFAULT_CHAT_ID`.
+**Planning and automation.** Task management with priorities, projects, and recurrence. Cron jobs — schedule a morning briefing, periodic reporting, or anything else. Aide proactively alerts you about upcoming deadlines.
 
-```bash
-./scripts/run.sh ~/aide-workspace
-```
+**Examples:**
+- E-shop management — API integration, product descriptions, inventory updates
+- SEO research — keyword analysis, site audits, content strategy
+- Content creation — writing articles, review, CMS publishing
+- Morning briefing — task overview, deadlines, important information
+- Invoicing and emails — integration with billing APIs, email services, Discord
+- Monitoring — tracking GitHub commits, web changes, RSS feeds
+- Research — web search, product comparison, fact-checking
 
-Podrobný setup pro jednotlivé platformy:
-- [Telegram setup](docs/TELEGRAM_SETUP.md)
-- [Slack setup](docs/SLACK_SETUP.md)
+## Requirements
 
-## Instalace na VPS
+- Python 3 + pip
+- [Claude Code CLI](https://claude.com/product/claude-code) installed and in PATH (requires subscription)
+- Telegram bot token and/or Slack app tokens
 
-Automaticky (doporučeno):
+## Installation
+
+### VPS (recommended)
 
 ```bash
 sudo ./scripts/install_vps.sh
 ```
 
-Skript nainstaluje závislosti, vytvoří venv, nastaví systemd services a denní auto-deploy (3:55 cron).
+The script installs dependencies, creates a venv, sets up systemd services, and configures daily auto-deploy.
+
+After installation, fill in `/opt/aide/workspace/.env` (tokens, user IDs, chat IDs) and run:
+
+```bash
+./scripts/run.sh /opt/aide/workspace
+```
 
 <details>
-<summary>Ruční instalace</summary>
+<summary>Manual installation (step by step)</summary>
 
-1. Nainstaluj závislosti: `sudo apt install -y git python3 python3-pip python3-venv python3-full`
-2. Nainstaluj [Claude Code CLI](https://claude.com/product/claude-code) a ověř, že je v PATH
-3. Klonuj repo:
+1. Install dependencies: `sudo apt install -y git python3 python3-pip python3-venv python3-full`
+2. Install [Claude Code CLI](https://claude.com/product/claude-code) and verify it's in PATH
+3. Clone the repo:
    ```bash
    sudo mkdir -p /opt/aide && cd /opt/aide
    git clone https://github.com/PavelTajdus/Aide engine && cd engine
    ```
-4. Inicializuj workspace: `./scripts/init.sh /opt/aide/workspace`
-5. Nastav ownership: `sudo chown -R $USER:$USER /opt/aide`
-6. Vyplň `/opt/aide/workspace/.env`
-7. Vytvoř venv a nainstaluj dependencies:
+4. Initialize workspace: `./scripts/init.sh /opt/aide/workspace`
+5. Set ownership: `sudo chown -R $USER:$USER /opt/aide`
+6. Fill in `/opt/aide/workspace/.env`
+7. Create venv and install dependencies:
    ```bash
    python3 -m venv /opt/aide/venv
    /opt/aide/venv/bin/pip install -r /opt/aide/engine/requirements.txt
    ```
-8. Spusť: `PYTHON_BIN=/opt/aide/venv/bin/python ./scripts/run.sh /opt/aide/workspace`
+8. Run: `PYTHON_BIN=/opt/aide/venv/bin/python ./scripts/run.sh /opt/aide/workspace`
 
 </details>
 
-### Deploy a aktualizace
+### Local development
+
+```bash
+./scripts/init.sh ~/aide-workspace
+# fill in ~/aide-workspace/.env
+./scripts/run.sh ~/aide-workspace
+```
+
+Detailed setup guides:
+- [Telegram setup](docs/TELEGRAM_SETUP.md)
+- [Slack setup](docs/SLACK_SETUP.md)
+
+### Deploy and updates
 
 ```bash
 ./scripts/deploy.sh [workspace]    # git pull → pip install → update workspace → restart
 ```
 
-`install_vps.sh` nastaví automatický deploy každý den ve 3:55.
+`install_vps.sh` sets up automatic daily deploy at 3:55 AM.
 
 ## Workspace
 
-Workspace je oddělený od engine repa — obsahuje tvoje osobní data a nikdy nepatří do enginu.
+The workspace is separate from the engine repo — it contains your personal data and should never be committed to the engine.
 
 ```
 ~/aide-workspace/
-├── .env                          # Tokeny, API klíče
-├── CLAUDE.md                     # Osobnost a pravidla agenta
-├── .claude/skills/               # Symlinky na default_skills/ + vlastní
-├── core_tools/                   # Symlink na engine/core_tools/
-├── tools/                        # Vlastní nástroje
-├── knowledge/                    # Referenční dokumenty
-├── data/                         # Sessions, úkoly, paměť, cron, logy
+├── .env                          # Tokens, API keys
+├── CLAUDE.md                     # Agent personality and rules
+├── .claude/skills/               # Symlinks to default_skills/ + custom
+├── core_tools/                   # Symlink to engine/core_tools/
+├── tools/                        # Custom tools
+├── knowledge/                    # Reference documents
+├── data/                         # Sessions, tasks, memory, cron, logs
 ├── conversations/
-└── inbox/                        # Nahrané soubory z chatu
+└── inbox/                        # Uploaded files from chat
 ```
 
-Engine najde workspace podle: argument skriptu > env `AIDE_WORKSPACE` > aktuální adresář > `~/aide-workspace`.
+The engine finds the workspace by: script argument > env `AIDE_WORKSPACE` > current directory > `~/aide-workspace`.
 
 ### Backup
 
@@ -95,76 +113,76 @@ git remote add origin <YOUR_PRIVATE_REPO>
 git push -u origin main
 ```
 
-Pak stačí: `./scripts/backup.sh [workspace] --push`
+Then just: `./scripts/backup.sh [workspace] --push`
 
-## Skripty
+## Scripts
 
-| Skript | Popis |
-|--------|-------|
+| Script | Description |
+|--------|-------------|
 | `run.sh [workspace]` | Start (bot + scheduler) |
 | `stop.sh [workspace]` | Stop |
 | `restart.sh [workspace]` | Restart + claude update |
 | `deploy.sh [workspace]` | Git pull + pip + update + restart |
-| `status.sh [workspace]` | Status služeb |
-| `logs.sh [workspace] [bot\|slack\|scheduler]` | Logy |
-| `ps.sh [workspace]` | Procesy |
+| `status.sh [workspace]` | Service status |
+| `logs.sh [workspace] [bot\|slack\|scheduler]` | Logs |
+| `ps.sh [workspace]` | Processes |
 | `backup.sh [workspace] [--push]` | Git backup workspace |
 
-## Konfigurace (.env)
+## Configuration (.env)
 
 ### Telegram
 
-| Proměnná | Popis |
-|----------|-------|
+| Variable | Description |
+|----------|-------------|
 | `TELEGRAM_TOKEN` | Bot token |
-| `ALLOWED_USERS` | Povolená Telegram user ID |
-| `AIDE_DEFAULT_CHAT_ID` | Chat ID pro notifikace a připomínky |
-| `AIDE_TELEGRAM_ENABLED` | `0` = vypnuto |
-| `AIDE_TELEGRAM_PARSE_MODE` | `markdown_v2` pro formátování (default: plain text) |
+| `ALLOWED_USERS` | Allowed Telegram user IDs |
+| `AIDE_DEFAULT_CHAT_ID` | Chat ID for notifications and reminders |
+| `AIDE_TELEGRAM_ENABLED` | `0` = disabled |
+| `AIDE_TELEGRAM_PARSE_MODE` | `markdown_v2` for formatting (default: plain text) |
 | `AIDE_TELEGRAM_ESCAPE` | `none\|aggressive` |
-| `AIDE_TELEGRAM_PROGRESS` | `1` = stavové updaty během běhu |
-| `AIDE_TELEGRAM_MAX_FILE_MB` | Max velikost příloh (default 10) |
+| `AIDE_TELEGRAM_PROGRESS` | `1` = status updates during execution |
+| `AIDE_TELEGRAM_MAX_FILE_MB` | Max attachment size (default 10) |
 
 ### Slack
 
-| Proměnná | Popis |
-|----------|-------|
+| Variable | Description |
+|----------|-------------|
 | `SLACK_BOT_TOKEN` | xoxb-... token |
 | `SLACK_APP_TOKEN` | xapp-... token (Socket Mode) |
-| `AIDE_SLACK_ENABLED` | `1` = zapnuto |
-| `AIDE_SLACK_ALLOWED_USERS` | Povolená Slack user ID |
-| `AIDE_SLACK_DEFAULT_TARGET` | Channel/user ID pro notifikace |
+| `AIDE_SLACK_ENABLED` | `1` = enabled |
+| `AIDE_SLACK_ALLOWED_USERS` | Allowed Slack user IDs |
+| `AIDE_SLACK_DEFAULT_TARGET` | Channel/user ID for notifications |
 | `AIDE_SLACK_DEFAULT_TARGET_TYPE` | `auto\|dm\|channel` (default `auto`) |
-| `AIDE_SLACK_MAX_FILE_MB` | Max velikost příloh (default 10) |
-| `AIDE_NOTIFY_PROVIDER` | `slack` pro notifikace přes Slack |
+| `AIDE_SLACK_MAX_FILE_MB` | Max attachment size (default 10) |
+| `AIDE_NOTIFY_PROVIDER` | `slack` for Slack notifications |
 
-### Ostatní
+### Other
 
-| Proměnná | Popis |
-|----------|-------|
-| `AIDE_CLAUDE_SKIP_PERMISSIONS` | `1` = Claude Code bez potvrzování |
-| `AIDE_SCHEDULER_WORKERS` | Paralelní cron joby (default 2) |
+| Variable | Description |
+|----------|-------------|
+| `AIDE_CLAUDE_SKIP_PERMISSIONS` | `1` = Claude Code without confirmations |
+| `AIDE_SCHEDULER_WORKERS` | Parallel cron jobs (default 2) |
 
-## Vlastní nástroje a skills
+## Custom tools and skills
 
-**Nástroje** jsou Python CLI skripty v `workspace/tools/`:
-- Vstup přes `argparse`, výstup JSON `{success, data|error}`
-- API klíče z `.env`, nic hardcoded
-- Šablona: `templates/tool_skeleton.py`
+**Tools** are Python CLI scripts in `workspace/tools/`. Aide can create them on its own when you describe what you need — or you can write them manually:
+- Input via `argparse`, output JSON `{success, data|error}`
+- API keys from `.env`, nothing hardcoded
+- Template: `templates/tool_skeleton.py`
 
-**Skills** jsou Markdown soubory v `.claude/skills/`, které popisují kdy a jak agent nástroj použije.
+**Skills** are Markdown files in `.claude/skills/` that describe when and how the agent should use a tool. Aide comes with built-in skills for memory, tasks, research, and daily overviews.
 
 ## Troubleshooting
 
-Zkontroluj status a logy:
+Check status and logs:
 
 ```bash
 ./scripts/status.sh [workspace]
 ./scripts/logs.sh [workspace] [bot|slack|scheduler]
 ```
 
-**Telegram neodpovídá:** ověř `TELEGRAM_TOKEN` a `ALLOWED_USERS` v `.env`, zkontroluj `bot.log`.
+**Telegram not responding:** verify `TELEGRAM_TOKEN` and `ALLOWED_USERS` in `.env`, check `bot.log`.
 
-**Slack neodpovídá:** ověř `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` a `AIDE_SLACK_ALLOWED_USERS`, zkontroluj `slack.log`.
+**Slack not responding:** verify `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` and `AIDE_SLACK_ALLOWED_USERS`, check `slack.log`.
 
-**Scheduler neposílá připomínky:** ověř `AIDE_DEFAULT_CHAT_ID`, zkontroluj `scheduler.log`.
+**Scheduler not sending reminders:** verify `AIDE_DEFAULT_CHAT_ID`, check `scheduler.log`.

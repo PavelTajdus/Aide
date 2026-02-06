@@ -153,8 +153,8 @@ def _build_prompt(text: Optional[str], attachment_paths: list[str]) -> str:
     if attachment_paths:
         attachments = "\n".join(f"- {p}" for p in attachment_paths)
         if base:
-            return f"{base}\n\nPřílohy:\n{attachments}"
-        return f"Přišla příloha:\n{attachments}"
+            return f"{base}\n\nAttachments:\n{attachments}"
+        return f"Attachment received:\n{attachments}"
     return base
 
 
@@ -208,10 +208,10 @@ def _format_thread_context(history: list[Dict[str, str]]) -> str:
     if not history:
         return ""
 
-    lines = ["Předchozí konverzace ve vlákně:"]
+    lines = ["Previous thread conversation:"]
     lines.append("---")
     for msg in history:
-        role_label = "Uživatel" if msg["role"] == "user" else "Aide"
+        role_label = "User" if msg["role"] == "user" else "Aide"
         # Truncate very long messages
         content = msg["content"]
         if len(content) > 500:
@@ -376,11 +376,11 @@ def _progress_worker(
 
 def _handle_command(text: str) -> Optional[str]:
     cmd = text.strip().lower()
-    if cmd in ("new", "nova", "nová", "reset"):
+    if cmd in ("new", "reset"):
         return "new"
-    if cmd in ("stop", "zastav"):
+    if cmd in ("stop",):
         return "stop"
-    if cmd in ("session", "status", "stav"):
+    if cmd in ("session", "status"):
         return "session"
     return None
 
@@ -420,13 +420,13 @@ def _process_message(
     cmd = _handle_command(text)
     if cmd == "new":
         _set_session_id(workspace, channel_id, thread_root, None)
-        _post_message(client, channel_id, "Nová session vytvořena.", thread_root)
+        _post_message(client, channel_id, "New session created.", thread_root)
         return
     if cmd == "stop":
         key = _session_key(channel_id, thread_root)
         proc = RUNNING.get(key)
         if not proc:
-            _post_message(client, channel_id, "Neběží žádná session.", thread_root)
+            _post_message(client, channel_id, "No session running.", thread_root)
             return
         proc.terminate()
         try:
@@ -434,17 +434,17 @@ def _process_message(
         except Exception:
             proc.kill()
         RUNNING.pop(key, None)
-        _post_message(client, channel_id, "Session zastavena.", thread_root)
+        _post_message(client, channel_id, "Session stopped.", thread_root)
         return
     if cmd == "session":
         session_id = _get_session_id(workspace, channel_id, thread_root)
         if not session_id:
-            _post_message(client, channel_id, "Žádná aktivní session.", thread_root)
+            _post_message(client, channel_id, "No active session.", thread_root)
             return
-        _post_message(client, channel_id, "Zjišťuji stav...", thread_root)
+        _post_message(client, channel_id, "Checking status...", thread_root)
         usage_info = get_session_usage(session_id, working_dir=workspace)
         if not usage_info:
-            _post_message(client, channel_id, f"Session: `{session_id[:8]}...` - nelze získat info", thread_root)
+            _post_message(client, channel_id, f"Session: `{session_id[:8]}...` - cannot get info", thread_root)
             return
         model_usage = usage_info.get("model_usage", {})
         model_name = list(model_usage.keys())[0] if model_usage else "unknown"
@@ -459,8 +459,8 @@ def _process_message(
         msg = (
             f"*Session:* `{session_id[:8]}...`\n"
             f"*Model:* {model_name}\n"
-            f"*Kontext:* {total_context:,} / {context_window:,} ({usage_percent:.1f}%)\n"
-            f"*Zbývá:* ~{remaining:,} tokenů"
+            f"*Context:* {total_context:,} / {context_window:,} ({usage_percent:.1f}%)\n"
+            f"*Remaining:* ~{remaining:,} tokens"
         )
         _post_message(client, channel_id, msg, thread_root)
         return
@@ -488,13 +488,13 @@ def _process_message(
 
     prompt = _build_prompt(text, attachment_paths)
     if oversize:
-        warning = f"Příloha je příliš velká (max {int(max_mb)} MB) a nebyla stažena."
+        warning = f"Attachment too large (max {int(max_mb)} MB), not downloaded."
         if not prompt:
             _post_message(client, channel_id, warning, thread_root)
             return
         _post_message(client, channel_id, warning, thread_root)
     if not prompt:
-        _post_message(client, channel_id, "Nepřišel text ani příloha.", thread_root)
+        _post_message(client, channel_id, "No text or attachment received.", thread_root)
         return
 
     # Fetch thread history for context (exclude the last message which is current prompt)
@@ -505,9 +505,9 @@ def _process_message(
             history = history[:-1]
         thread_context = _format_thread_context(history)
         if thread_context:
-            prompt = f"{thread_context}\nAktuální zpráva:\n{prompt}"
+            prompt = f"{thread_context}\nCurrent message:\n{prompt}"
 
-    thinking_ts = _post_message(client, channel_id, "Přemýšlím...", thread_root)
+    thinking_ts = _post_message(client, channel_id, "Thinking...", thread_root)
     if not thinking_ts:
         return
 
@@ -555,7 +555,7 @@ def _process_message(
         )
     except Exception as exc:
         RUNNING.pop(key, None)
-        _update_message(client, channel_id, thinking_ts, f"Chyba: {exc}")
+        _update_message(client, channel_id, thinking_ts, f"Error: {exc}")
         if progress_q:
             progress_q.put(None)
         if progress_thread:
@@ -715,7 +715,7 @@ def main() -> None:
             for k in to_remove:
                 data.pop(k, None)
             atomic_write_json(path, data)
-        _post_message(client, channel_id, "🔄 Session resetována. Začínáme čistý.")
+        _post_message(client, channel_id, "Session reset. Starting fresh.")
 
     @app.command("/stop")
     def handle_stop_command(ack, body, logger):
@@ -732,9 +732,9 @@ def main() -> None:
                 RUNNING.pop(key, None)
                 stopped = True
         if stopped:
-            _post_message(client, channel_id, "Agent zastaven.")
+            _post_message(client, channel_id, "Agent stopped.")
         else:
-            _post_message(client, channel_id, "Žádný agent neběží.")
+            _post_message(client, channel_id, "No agent running.")
 
     @app.command("/session")
     def handle_session_command(ack, body, logger):
@@ -752,19 +752,19 @@ def main() -> None:
         channel_sessions = {k: v for k, v in data.items() if k.startswith(f"{channel_id}:")}
 
         if not channel_sessions:
-            _post_message(client, channel_id, "Žádná aktivní session v tomto kanálu.")
+            _post_message(client, channel_id, "No active session in this channel.")
             return
 
-        _post_message(client, channel_id, f"Zjišťuji stav {len(channel_sessions)} session...")
+        _post_message(client, channel_id, f"Checking {len(channel_sessions)} session(s)...")
 
         messages = []
         for key, session_id in channel_sessions.items():
             thread_ts = key.split(":", 1)[1] if ":" in key else "root"
-            thread_label = "kanál" if thread_ts == "root" else f"vlákno"
+            thread_label = "channel" if thread_ts == "root" else "thread"
 
             usage_info = get_session_usage(session_id, working_dir=workspace)
             if not usage_info:
-                messages.append(f"*{thread_label}:* `{session_id[:8]}...` - nelze získat info")
+                messages.append(f"*{thread_label}:* `{session_id[:8]}...` - cannot get info")
                 continue
 
             model_usage = usage_info.get("model_usage", {})
@@ -781,7 +781,7 @@ def main() -> None:
 
             messages.append(
                 f"*{thread_label}:* `{session_id[:8]}...`\n"
-                f"  Kontext: {total_context:,} / {context_window:,} ({usage_percent:.1f}%)"
+                f"  Context: {total_context:,} / {context_window:,} ({usage_percent:.1f}%)"
             )
 
         _post_message(client, channel_id, "\n\n".join(messages))

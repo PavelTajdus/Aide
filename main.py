@@ -71,8 +71,8 @@ def _build_prompt(text: Optional[str], attachment_paths: list[str]) -> str:
     if attachment_paths:
         attachments = "\n".join(f"- {p}" for p in attachment_paths)
         if base:
-            return f"{base}\n\nPřílohy:\n{attachments}"
-        return f"Přišla příloha:\n{attachments}"
+            return f"{base}\n\nAttachments:\n{attachments}"
+        return f"Attachment received:\n{attachments}"
     return base
 
 
@@ -110,14 +110,14 @@ def _progress_enabled() -> bool:
 def _progress_text(tool_name: str) -> str:
     name = tool_name.lower()
     if "web" in name or "search" in name:
-        return "Hledám na webu…"
+        return "Searching the web…"
     if "bash" in name or "shell" in name:
-        return "Spouštím příkaz…"
+        return "Running command…"
     if "read" in name:
-        return "Načítám kontext…"
+        return "Loading context…"
     if "write" in name or "edit" in name:
-        return "Upravuji soubory…"
-    return "Pracuji…"
+        return "Editing files…"
+    return "Working…"
 
 
 def _max_file_bytes() -> tuple[int, float]:
@@ -171,14 +171,14 @@ async def _progress_worker(bot, chat_id: int, message_id: int, queue: asyncio.Qu
 async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     workspace = resolve_workspace(context.application.bot_data.get("workspace"))
     _set_session_id(workspace, update.effective_chat.id, None)
-    await update.message.reply_text("Nová session vytvořena.")
+    await update.message.reply_text("New session created.")
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     proc = RUNNING.get(chat_id)
     if not proc:
-        await update.message.reply_text("Neběží žádná session.")
+        await update.message.reply_text("No session running.")
         return
     proc.terminate()
     try:
@@ -186,7 +186,7 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         proc.kill()
     RUNNING.pop(chat_id, None)
-    await update.message.reply_text("Session zastavena.")
+    await update.message.reply_text("Session stopped.")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -232,16 +232,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     prompt = _build_prompt(message.text or message.caption, attachment_paths)
     if oversize:
-        warning = f"Příloha je příliš velká (max {int(max_mb)} MB) a nebyla stažena."
+        warning = f"Attachment too large (max {int(max_mb)} MB), not downloaded."
         if not prompt:
             await message.reply_text(warning)
             return
         await message.reply_text(warning)
     if not prompt:
-        await message.reply_text("Nepřišel text ani příloha.")
+        await message.reply_text("No text or attachment received.")
         return
 
-    thinking = await message.reply_text("Přemýšlím...")
+    thinking = await message.reply_text("Thinking...")
 
     session_id = _get_session_id(workspace, update.effective_chat.id)
 
@@ -287,7 +287,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     except Exception as exc:
         RUNNING.pop(update.effective_chat.id, None)
-        safe_text = f"Chyba: {exc}"
+        safe_text = f"Error: {exc}"
         await context.bot.edit_message_text(
             text=safe_text,
             chat_id=update.effective_chat.id,
