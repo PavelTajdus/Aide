@@ -648,7 +648,7 @@ def main() -> None:
 
     @app.event("message")
     def handle_message(body, event, logger):
-        if event.get("subtype"):
+        if event.get("subtype") and event.get("subtype") != "file_share":
             return
         if event.get("bot_id"):
             return
