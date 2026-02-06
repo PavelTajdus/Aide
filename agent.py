@@ -35,6 +35,11 @@ def _extract_text(evt: Event) -> Optional[str]:
     if isinstance(text, str):
         return text
 
+    # Result field (Claude CLI result event)
+    result = evt.get("result")
+    if isinstance(result, str):
+        return result
+
     # Delta-based streaming
     delta = evt.get("delta")
     if isinstance(delta, dict):
@@ -201,6 +206,8 @@ def run_agent(
 
     tool_log: List[Event] = []
     assistant_chunks: List[str] = []
+    post_tool_chunks: List[str] = []
+    saw_tool_use = False
     final_text: Optional[str] = None
     new_session_id: Optional[str] = None
     raw_lines: List[str] = []
@@ -238,11 +245,14 @@ def run_agent(
         text = _extract_text(evt)
         if text:
             assistant_chunks.append(text)
+            post_tool_chunks.append(text)
 
         # Detect and extract tool use info
         tools_found = _extract_tools_from_event(evt)
 
         if tools_found:
+            saw_tool_use = True
+            post_tool_chunks.clear()
             tool_log.append(evt)
             if tool_cb:
                 for tool_info in tools_found:
@@ -257,7 +267,10 @@ def run_agent(
         proc.wait(timeout=5)
 
     if final_text is None:
-        final_text = "".join(assistant_chunks).strip()
+        if saw_tool_use and post_tool_chunks:
+            final_text = "".join(post_tool_chunks).strip()
+        else:
+            final_text = "".join(assistant_chunks).strip()
 
     if not final_text:
         stderr = proc.stderr.read().strip() if proc.stderr else ""
