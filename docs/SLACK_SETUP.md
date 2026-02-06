@@ -19,12 +19,16 @@ Krok za krokem:
   - `im:history`
   - `im:write`
   - `files:read`
+  - `channels:history` (nutné pro `AIDE_SLACK_AUTO_THREAD`)
+  - `groups:history` (nutné pro auto-thread v privátních kanálech)
 
 4. Zapni Event Subscriptions
 - Zapni "Event Subscriptions".
 - Přidej Bot Events:
   - `app_mention`
   - `message.im`
+  - `message.channels` (nutné pro `AIDE_SLACK_AUTO_THREAD`)
+  - `message.groups` (nutné pro auto-thread v privátních kanálech)
 Poznámka: Pokud Slack UI vyžaduje Request URL, použij vlastní veřejný endpoint pro ověření. Při Socket Mode se eventy doručují přes WebSocket.
 
 5. Nainstaluj app do workspace
@@ -46,12 +50,14 @@ SLACK_APP_TOKEN=xapp-...
 AIDE_SLACK_ENABLED=1
 AIDE_SLACK_ALLOWED_USERS=UXXXXXXX
 AIDE_SLACK_DEFAULT_TARGET=UXXXXXXX
+AIDE_SLACK_AUTO_THREAD=1
 AIDE_NOTIFY_PROVIDER=slack
 ```
 Poznámky:
 - `AIDE_SLACK_ALLOWED_USERS`: seznam Slack user ID oddělených čárkou.
 - `AIDE_SLACK_DEFAULT_TARGET`: `U...` pro DM, nebo `C.../G...` pro kanál.
 - Pokud chceš vynutit cíl, použij `AIDE_SLACK_DEFAULT_TARGET_TYPE=dm|channel`.
+- `AIDE_SLACK_AUTO_THREAD`: `1` = bot automaticky odpovídá ve vláknech bez nutnosti @zmínky (výchozí: `0`). Vyžaduje přidat event subscriptions `message.channels`/`message.groups` a scopes `channels:history`/`groups:history`.
 
 8. Spusť bota
 ```

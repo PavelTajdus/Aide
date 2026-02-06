@@ -131,6 +131,11 @@ def _progress_enabled() -> bool:
     return raw not in ("0", "false", "no", "off")
 
 
+def _auto_thread_enabled() -> bool:
+    raw = os.environ.get("AIDE_SLACK_AUTO_THREAD", "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
 def _max_file_bytes() -> tuple[int, float]:
     raw = os.environ.get("AIDE_SLACK_MAX_FILE_MB", "10").strip().lower()
     try:
@@ -647,23 +652,46 @@ def main() -> None:
             return
         if event.get("bot_id"):
             return
-        if event.get("channel_type") != "im":
-            return
+        channel_type = event.get("channel_type")
         channel_id = event.get("channel")
         if not channel_id:
             return
-        thread_root = event.get("thread_ts")
-        _handle_event(
-            client,
-            workspace,
-            allowed,
-            bot_user_id,
-            channel_id,
-            thread_root,
-            event.get("user"),
-            event.get("text", ""),
-            event.get("files", []) or [],
-        )
+
+        if channel_type == "im":
+            # DM – always respond
+            thread_root = event.get("thread_ts")
+            _handle_event(
+                client,
+                workspace,
+                allowed,
+                bot_user_id,
+                channel_id,
+                thread_root,
+                event.get("user"),
+                event.get("text", ""),
+                event.get("files", []) or [],
+            )
+            return
+
+        # Channel thread auto-reply (no mention needed)
+        if _auto_thread_enabled() and channel_type in ("channel", "group"):
+            thread_ts = event.get("thread_ts")
+            if not thread_ts:
+                return  # not a thread reply – ignore
+            # Only respond if we already have a session for this thread
+            if not _get_session_id(workspace, channel_id, thread_ts):
+                return
+            _handle_event(
+                client,
+                workspace,
+                allowed,
+                bot_user_id,
+                channel_id,
+                thread_ts,
+                event.get("user"),
+                event.get("text", ""),
+                event.get("files", []) or [],
+            )
 
     @app.command("/new")
     def handle_new_command(ack, body, logger):
