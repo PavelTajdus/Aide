@@ -51,9 +51,9 @@ telegram_configured () {
   local env_file="${1:-.env}"
   [[ -f "$env_file" ]] || return 1
   local enabled token allowed
-  enabled=$(grep -E "^AIDE_TELEGRAM_ENABLED=" "$env_file" | cut -d= -f2- || true)
+  enabled=$(grep -E "^AIDE_TELEGRAM_ENABLED=" "$env_file" | cut -d= -f2- | tr '[:upper:]' '[:lower:]' || true)
   # If explicitly disabled, not configured
-  if [[ "${enabled,,}" == "0" || "${enabled,,}" == "false" || "${enabled,,}" == "no" ]]; then
+  if [[ "$enabled" == "0" || "$enabled" == "false" || "$enabled" == "no" ]]; then
     return 1
   fi
   token=$(grep -E "^TELEGRAM_TOKEN=" "$env_file" | cut -d= -f2- || true)
@@ -65,8 +65,8 @@ slack_configured () {
   local env_file="${1:-.env}"
   [[ -f "$env_file" ]] || return 1
   local enabled bot_token app_token
-  enabled=$(grep -E "^AIDE_SLACK_ENABLED=" "$env_file" | cut -d= -f2- || true)
-  if [[ "${enabled,,}" == "0" || "${enabled,,}" == "false" || "${enabled,,}" == "no" ]]; then
+  enabled=$(grep -E "^AIDE_SLACK_ENABLED=" "$env_file" | cut -d= -f2- | tr '[:upper:]' '[:lower:]' || true)
+  if [[ "$enabled" == "0" || "$enabled" == "false" || "$enabled" == "no" ]]; then
     return 1
   fi
   bot_token=$(grep -E "^SLACK_BOT_TOKEN=" "$env_file" | cut -d= -f2- || true)
