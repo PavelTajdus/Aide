@@ -1,69 +1,121 @@
-# Slack bot setup (Socket Mode)
+# Nastavení Slack bota (Socket Mode)
 
-Step by step:
+## 1. Vytvoření Slack aplikace
 
-1. Create a Slack app
-- Open Slack API Apps.
-- Click "Create New App" -> "From scratch".
-- Choose a name and workspace.
+1. Otevři [Slack API Apps](https://api.slack.com/apps)
+2. Klikni **Create New App** → **From scratch**
+3. Zadej název (např. "Aide") a vyber workspace
 
-2. Enable Socket Mode
-- In App settings, enable "Socket Mode".
-- Create an App-Level Token with `connections:write` scope.
-- Copy the token (starts with `xapp-...`).
+## 2. Zapnutí Socket Mode
 
-3. Set up OAuth scopes for the bot
-- In "OAuth & Permissions", add Bot Token Scopes:
-  - `app_mentions:read`
-  - `chat:write`
-  - `im:history`
-  - `im:write`
-  - `files:read`
-  - `channels:history` (required for `AIDE_SLACK_AUTO_THREAD`)
-  - `groups:history` (required for auto-thread in private channels)
+Socket Mode = bot komunikuje přes WebSocket, nepotřebuješ veřejnou URL.
 
-4. Enable Event Subscriptions
-- Enable "Event Subscriptions".
-- Add Bot Events:
-  - `app_mention`
-  - `message.im`
-  - `message.channels` (required for `AIDE_SLACK_AUTO_THREAD`)
-  - `message.groups` (required for auto-thread in private channels)
-Note: If Slack UI requires a Request URL, use your own public endpoint for verification. With Socket Mode, events are delivered via WebSocket.
+1. V levém menu jdi do **Socket Mode**
+2. Zapni **Enable Socket Mode**
+3. Vytvoř App-Level Token — pojmenuj ho (např. "socket") a přidej scope `connections:write`
+4. Zkopíruj token (začíná na `xapp-...`) — budeš ho potřebovat do `.env`
 
-5. Install app to workspace
-- In "OAuth & Permissions", click "Install to Workspace".
-- Copy the Bot User OAuth Token (starts with `xoxb-...`).
+## 3. Nastavení oprávnění (OAuth Scopes)
 
-6. Add the bot to a channel
-- In the channel, type `/invite @your-bot-name`.
+1. V levém menu jdi do **OAuth & Permissions**
+2. V sekci **Bot Token Scopes** přidej:
 
-7. Get your Slack user ID
-- Click your profile in the top right.
-- Choose "Profile".
-- Click the three dots and select "Copy member ID".
+| Scope | K čemu |
+|-------|--------|
+| `app_mentions:read` | Bot vidí když ho někdo @zmíní |
+| `chat:write` | Bot může psát zprávy |
+| `im:history` | Bot čte historii DM |
+| `im:write` | Bot může psát DM |
+| `files:read` | Bot vidí nahrané soubory (přílohy) |
 
-8. Configure `.env` in your workspace
+### Volitelné scopes pro auto-thread
+
+Pokud chceš aby bot automaticky odpovídal ve vláknech bez @zmínky:
+
+| Scope | K čemu |
+|-------|--------|
+| `channels:history` | Čtení historie veřejných kanálů |
+| `groups:history` | Čtení historie privátních kanálů |
+
+## 4. Nastavení Event Subscriptions
+
+1. V levém menu jdi do **Event Subscriptions**
+2. Zapni **Enable Events**
+3. V sekci **Subscribe to bot events** přidej:
+
+| Event | K čemu |
+|-------|--------|
+| `app_mention` | Reakce na @zmínku |
+| `message.im` | Reakce na DM |
+
+### Volitelné eventy pro auto-thread
+
+| Event | K čemu |
+|-------|--------|
+| `message.channels` | Zprávy ve veřejných kanálech |
+| `message.groups` | Zprávy v privátních kanálech |
+
+> Slack UI může požadovat Request URL — při Socket Mode to ignoruj, eventy jdou přes WebSocket.
+
+## 5. Instalace do workspace
+
+1. Jdi zpět do **OAuth & Permissions**
+2. Klikni **Install to Workspace** a potvrď
+3. Zkopíruj **Bot User OAuth Token** (začíná na `xoxb-...`)
+
+## 6. Přidání bota do kanálu
+
+V kanálu kde chceš bota používat napiš:
+```
+/invite @jmeno-bota
+```
+
+## 7. Zjištění svého Slack user ID
+
+1. Klikni na svůj profil (vpravo nahoře)
+2. Zvol **Profil**
+3. Klikni na **tři tečky** (⋮) a vyber **Copy member ID**
+
+## 8. Konfigurace `.env`
+
+Otevři soubor `.env` ve svém workspace a vyplň:
+
 ```
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
 AIDE_SLACK_ENABLED=1
 AIDE_SLACK_ALLOWED_USERS=UXXXXXXX
 AIDE_SLACK_DEFAULT_TARGET=UXXXXXXX
-AIDE_SLACK_AUTO_THREAD=1
 AIDE_NOTIFY_PROVIDER=slack
 ```
-Notes:
-- `AIDE_SLACK_ALLOWED_USERS`: comma-separated list of Slack user IDs.
-- `AIDE_SLACK_DEFAULT_TARGET`: `U...` for DM, or `C.../G...` for a channel.
-- To force a target type, use `AIDE_SLACK_DEFAULT_TARGET_TYPE=dm|channel`.
-- `AIDE_SLACK_AUTO_THREAD`: `1` = bot automatically replies in threads without requiring @mention (default: `0`). Requires adding event subscriptions `message.channels`/`message.groups` and scopes `channels:history`/`groups:history`.
 
-9. Start the bot
-```
-./scripts/run.sh /path/to/workspace
+| Proměnná | Co to je |
+|----------|----------|
+| `SLACK_BOT_TOKEN` | Bot token z kroku 5 (`xoxb-...`) |
+| `SLACK_APP_TOKEN` | App-Level token z kroku 2 (`xapp-...`) |
+| `AIDE_SLACK_ENABLED` | `1` = zapnuto |
+| `AIDE_SLACK_ALLOWED_USERS` | Povolená user ID, oddělená čárkou |
+| `AIDE_SLACK_DEFAULT_TARGET` | Kam chodit notifikace — `U...` pro DM, `C...` pro kanál |
+| `AIDE_NOTIFY_PROVIDER` | `slack` = notifikace přes Slack (jinak jdou přes Telegram) |
+
+### Volitelné proměnné
+
+| Proměnná | Výchozí | Popis |
+|----------|---------|-------|
+| `AIDE_SLACK_DEFAULT_TARGET_TYPE` | `auto` | `dm` nebo `channel` pro vynucení cíle |
+| `AIDE_SLACK_AUTO_THREAD` | `0` | `1` = bot odpovídá ve vláknech bez @zmínky |
+| `AIDE_SLACK_PROGRESS` | `1` | Ukazovat průběh (jaký tool agent používá) |
+| `AIDE_SLACK_MAX_FILE_MB` | `10` | Max velikost příloh v MB |
+
+## 9. Spuštění
+
+```bash
+./scripts/run.sh /cesta/k/workspace
 ```
 
-Troubleshooting:
-- Check `slack.log` in `data/logs/`.
-- Wrong permissions? Try reinstalling the app (after changing scopes).
+## Řešení problémů
+
+- **Bot neodpovídá na @zmínku:** Zkontroluj že je bot přidaný v kanálu (`/invite`)
+- **DM nefungují:** Po restartu pošli @zmínku do kanálu — Socket Mode bug, DM se aktivují až po první channel interakci
+- **Chybná oprávnění:** Po změně scopes je potřeba app znovu nainstalovat do workspace (krok 5)
+- **Logy:** `data/logs/slack.log` ve workspace
