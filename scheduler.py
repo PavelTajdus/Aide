@@ -163,10 +163,10 @@ def _execute_heartbeat_job(workspace: Path) -> None:
 
     lines: List[str] = []
     if new_overdue:
-        lines.append(f"Overdue ({len(new_overdue)}):")
+        lines.append(f"Po termínu ({len(new_overdue)}):")
         lines.extend(_format_task_line(item["task"], item["due"]) for item in new_overdue)
     if new_upcoming:
-        lines.append(f"Upcoming within {soon_hours}h ({len(new_upcoming)}):")
+        lines.append(f"Blížící se ({len(new_upcoming)}):")
         lines.extend(_format_task_line(item["task"], item["due"]) for item in new_upcoming)
 
     # Track all task IDs (old + new) so we never re-report
