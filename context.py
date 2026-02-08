@@ -1,6 +1,7 @@
-"""Context aggregation: auto-recall relevant memory before agent runs."""
+"""Context aggregation: memory recall and conversation logging."""
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -31,6 +32,30 @@ _STOP_WORDS = {
 
 MAX_RESULTS = 10
 MAX_CONTEXT_CHARS = 2000
+MAX_LOG_CHARS = 2000
+
+
+def log_conversation(workspace: Path, user_text: str, assistant_text: str) -> None:
+    """Append a user/assistant exchange to the daily conversation log.
+
+    Never raises — errors are silently ignored to avoid breaking the main flow.
+    """
+    try:
+        log_dir = workspace / "data" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / f"conversations-{datetime.now().date().isoformat()}.log"
+        user_trunc = user_text[:MAX_LOG_CHARS] if user_text else ""
+        aide_trunc = assistant_text[:MAX_LOG_CHARS] if assistant_text else ""
+        entry = (
+            f"[{datetime.now().isoformat()}]\n"
+            f"User: {user_trunc}\n"
+            f"Aide: {aide_trunc}\n"
+            f"---\n"
+        )
+        with log_file.open("a", encoding="utf-8") as f:
+            f.write(entry)
+    except Exception:
+        pass
 
 
 def _extract_keywords(text: str) -> set:

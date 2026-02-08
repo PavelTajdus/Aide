@@ -68,6 +68,9 @@ def _cleanup_logs(workspace: Path, days: int = 14) -> None:
     for path in log_dir.glob("*.log"):
         try:
             date_str = path.stem
+            # Strip known prefixes (e.g. "conversations-2026-02-08")
+            if "-" in date_str and not date_str[0].isdigit():
+                date_str = date_str.split("-", 1)[1]
             date = datetime.fromisoformat(date_str).date()
             if date < cutoff:
                 path.unlink(missing_ok=True)
