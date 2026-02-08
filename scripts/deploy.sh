@@ -30,7 +30,7 @@ echo ""
 echo "--- update workspace ---"
 "$ENGINE_DIR/scripts/update.sh" "$WORKSPACE"
 
-# 4. Claude Code update + restart services
+# 4. Restart services
 echo ""
 echo "--- restart ---"
 "$ENGINE_DIR/scripts/restart.sh" "$WORKSPACE"

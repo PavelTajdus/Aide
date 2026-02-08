@@ -49,4 +49,13 @@ done
 mkdir -p "$WORKSPACE/data"
 echo "$ENGINE_VERSION" > "$WORKSPACE_VERSION_FILE"
 
+# Update Claude Code if installed
+if command -v claude &>/dev/null || [[ -x "$HOME/.local/bin/claude" ]]; then
+  echo ""
+  echo "--- Claude Code update ---"
+  CLAUDE_BIN="${HOME}/.local/bin/claude"
+  command -v claude &>/dev/null && CLAUDE_BIN="claude"
+  "$CLAUDE_BIN" update --yes 2>&1 || echo "Claude Code update skipped (failed or already up to date)"
+fi
+
 echo "Update completed."
