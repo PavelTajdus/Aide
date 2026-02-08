@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
@@ -75,29 +75,92 @@ def _write_auto(path: Path, content: str) -> None:
     path.write_text(_AUTO_HEADER + content, encoding="utf-8")
 
 
-def _generate_skills(workspace: Path, auto_dir: Path) -> None:
+def _parse_skill(path: Path) -> Optional[Dict[str, str]]:
+    """Parse a skill file and extract name, description, and trigger info."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+
+    name = path.stem
+    title = ""
+    triggers = ""
+
+    in_activate = False
+    activate_lines: List[str] = []
+
+    for line in text.splitlines():
+        stripped = line.strip()
+
+        # First heading = title/description
+        if not title and stripped.startswith("#") and "skill" in stripped.lower():
+            title = stripped.lstrip("#").strip()
+            # Remove "Skill: " prefix if present
+            if title.lower().startswith("skill:"):
+                title = title[len("skill:"):].strip()
+            continue
+
+        # Detect activation section
+        if stripped.lower().startswith("##") and any(
+            kw in stripped.lower() for kw in ("activate", "aktivuje")
+        ):
+            in_activate = True
+            continue
+
+        # Next ## heading ends activation section (### sub-headings are OK)
+        if in_activate and stripped.startswith("##") and not stripped.startswith("###"):
+            break
+
+        # Skip ### sub-headings within activation section
+        if in_activate and stripped.startswith("###"):
+            continue
+
+        if in_activate and stripped.startswith("-"):
+            activate_lines.append(stripped.lstrip("- ").strip())
+
+    if activate_lines:
+        # Keep triggers compact — truncate long lines
+        short = [l[:80].rstrip(". ") for l in activate_lines[:2]]
+        triggers = "; ".join(short)
+
+    return {"name": name, "title": title or name, "triggers": triggers}
+
+
+def _generate_skills(workspace: Path, auto_dir: Path) -> str:
+    """Generate skills.md and return compact skills summary for CLAUDE.md."""
     skills_dir = workspace / ".claude" / "skills"
     if not skills_dir.is_dir():
         _write_auto(auto_dir / "skills.md", "# Skills\n\n(none)\n")
-        return
+        return ""
 
-    lines = ["# Available skills\n"]
+    skills = []
     for md in sorted(skills_dir.glob("*.md")):
-        name = md.stem
-        # Read first non-empty line as description
-        try:
-            text = md.read_text(encoding="utf-8")
-        except Exception:
-            continue
-        desc = ""
-        for line in text.splitlines():
-            stripped = line.strip().lstrip("#").strip()
-            if stripped:
-                desc = stripped
-                break
-        lines.append(f"- **{name}**: {desc}")
+        info = _parse_skill(md)
+        if info:
+            skills.append(info)
 
+    if not skills:
+        _write_auto(auto_dir / "skills.md", "# Skills\n\n(none)\n")
+        return ""
+
+    # Full auto/skills.md with triggers
+    lines = ["# Available skills\n"]
+    for s in skills:
+        entry = f"- **{s['name']}**: {s['title']}"
+        if s["triggers"]:
+            entry += f" — {s['triggers']}"
+        lines.append(entry)
     _write_auto(auto_dir / "skills.md", "\n".join(lines) + "\n")
+
+    # Compact summary for CLAUDE.md
+    summary_lines = ["## Skills\n"]
+    for s in skills:
+        entry = f"- **{s['name']}**"
+        if s["triggers"]:
+            entry += f" — {s['triggers']}"
+        summary_lines.append(entry)
+
+    return "\n".join(summary_lines)
 
 
 def _generate_tasks(workspace: Path, auto_dir: Path) -> None:
@@ -159,7 +222,7 @@ def _is_migrated(workspace: Path) -> bool:
     return (rules / "soul.md").exists() or (rules / "user.md").exists()
 
 
-def _generate_claude_md(workspace: Path) -> None:
+def _generate_claude_md(workspace: Path, skills_summary: str = "") -> None:
     """Generate top-level CLAUDE.md as a minimal auto-generated wrapper.
 
     Only runs if workspace has been migrated to modular context (soul.md/user.md
@@ -189,6 +252,11 @@ def _generate_claude_md(workspace: Path) -> None:
         except Exception:
             pass
 
+    # Inline skills summary (compact routing table)
+    if skills_summary:
+        lines.append(skills_summary)
+        lines.append("")
+
     (workspace / "CLAUDE.md").write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -201,8 +269,9 @@ def generate_auto_context(workspace: Path) -> None:
     try:
         auto_dir = workspace / ".claude" / "rules" / "auto"
         auto_dir.mkdir(parents=True, exist_ok=True)
-        _generate_claude_md(workspace)
-        _generate_skills(workspace, auto_dir)
+        # Skills first — summary is inlined into CLAUDE.md
+        skills_summary = _generate_skills(workspace, auto_dir)
+        _generate_claude_md(workspace, skills_summary)
         _generate_tasks(workspace, auto_dir)
         _generate_cron(workspace, auto_dir)
         _generate_projects(workspace, auto_dir)
