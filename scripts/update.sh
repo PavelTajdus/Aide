@@ -55,7 +55,7 @@ if command -v claude &>/dev/null || [[ -x "$HOME/.local/bin/claude" ]]; then
   echo "--- Claude Code update ---"
   CLAUDE_BIN="${HOME}/.local/bin/claude"
   command -v claude &>/dev/null && CLAUDE_BIN="claude"
-  "$CLAUDE_BIN" update --yes 2>&1 || echo "Claude Code update skipped (failed or already up to date)"
+  "$CLAUDE_BIN" update 2>&1 || echo "Claude Code update skipped (failed or already up to date)"
 fi
 
 echo "Update completed."
