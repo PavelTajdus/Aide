@@ -127,7 +127,7 @@ def _execute_heartbeat_job(workspace: Path) -> None:
     with file_lock(tasks_path):
         tasks: List[Dict[str, Any]] = load_json(tasks_path, [])
         for task in tasks:
-            if task.get("status") == "completed":
+            if task.get("status") != "open":
                 continue
             due_dt = parse_dt(task.get("due"))
             if not due_dt:
@@ -233,7 +233,7 @@ def _run_task_reminders(workspace: Path, now: datetime) -> None:
         tasks: List[Dict[str, Any]] = load_json(tasks_path, [])
 
         for task in tasks:
-            if task.get("status") == "completed":
+            if task.get("status") != "open":
                 continue
             remind_at = parse_dt(task.get("remind"))
             if not remind_at:
