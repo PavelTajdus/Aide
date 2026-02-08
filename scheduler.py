@@ -84,13 +84,19 @@ def _heartbeat_soon_hours() -> int:
     return max(1, value)
 
 
+def _format_czech_date(dt: datetime) -> str:
+    if dt.hour == 0 and dt.minute == 0:
+        return f"{dt.day}. {dt.month}. {dt.year}"
+    return f"{dt.day}. {dt.month}. {dt.year} {dt.hour}:{dt.minute:02d}"
+
+
 def _format_task_line(task: Dict[str, Any], due_dt: datetime) -> str:
     title = task.get("title") or "(untitled)"
     project = task.get("project")
-    due_str = due_dt.isoformat()
+    due_str = _format_czech_date(due_dt)
     if project:
-        return f"- {title} (due {due_str}, projekt: {project})"
-    return f"- {title} (due {due_str})"
+        return f"- *{title}* ({due_str}, {project})"
+    return f"- *{title}* ({due_str})"
 
 
 def _heartbeat_hours() -> tuple:
