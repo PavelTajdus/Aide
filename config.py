@@ -1,6 +1,7 @@
+import json
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from dotenv import load_dotenv
 
@@ -51,3 +52,119 @@ def get_allowed_users() -> List[int]:
         except ValueError:
             continue
     return ids
+
+
+# ---------------------------------------------------------------------------
+# Auto-generated context files (.claude/rules/auto/)
+# ---------------------------------------------------------------------------
+
+_AUTO_HEADER = "<!-- Auto-generated, do not edit -->\n\n"
+
+
+def _load_json(path: Path, default: Any = None) -> Any:
+    if not path.exists():
+        return default
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _write_auto(path: Path, content: str) -> None:
+    path.write_text(_AUTO_HEADER + content, encoding="utf-8")
+
+
+def _generate_skills(workspace: Path, auto_dir: Path) -> None:
+    skills_dir = workspace / ".claude" / "skills"
+    if not skills_dir.is_dir():
+        _write_auto(auto_dir / "skills.md", "# Skills\n\n(none)\n")
+        return
+
+    lines = ["# Available skills\n"]
+    for md in sorted(skills_dir.glob("*.md")):
+        name = md.stem
+        # Read first non-empty line as description
+        try:
+            text = md.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        desc = ""
+        for line in text.splitlines():
+            stripped = line.strip().lstrip("#").strip()
+            if stripped:
+                desc = stripped
+                break
+        lines.append(f"- **{name}**: {desc}")
+
+    _write_auto(auto_dir / "skills.md", "\n".join(lines) + "\n")
+
+
+def _generate_tasks(workspace: Path, auto_dir: Path) -> None:
+    items = _load_json(workspace / "data" / "tasks.json", [])
+    open_tasks = [t for t in items if t.get("status", "open") != "done"]
+    if not open_tasks:
+        _write_auto(auto_dir / "tasks.md", "# Open tasks\n\n(none)\n")
+        return
+
+    lines = ["# Open tasks\n"]
+    for t in open_tasks[:20]:
+        prio = t.get("priority", "")
+        title = t.get("title", "(untitled)")
+        due = t.get("due", "")
+        parts = [f"- [{prio}] {title}" if prio else f"- {title}"]
+        if due:
+            parts.append(f"(due: {due})")
+        lines.append(" ".join(parts))
+
+    _write_auto(auto_dir / "tasks.md", "\n".join(lines) + "\n")
+
+
+def _generate_cron(workspace: Path, auto_dir: Path) -> None:
+    items = _load_json(workspace / "data" / "cron.json", [])
+    active = [j for j in items if j.get("enabled", True)]
+    if not active:
+        _write_auto(auto_dir / "cron.md", "# Cron jobs\n\n(none)\n")
+        return
+
+    lines = ["# Active cron jobs\n"]
+    for j in active[:10]:
+        jid = j.get("id", "?")
+        sched = j.get("schedule", "?")
+        prompt = j.get("prompt", "")[:60]
+        lines.append(f"- `{jid}` — `{sched}` — {prompt}")
+
+    _write_auto(auto_dir / "cron.md", "\n".join(lines) + "\n")
+
+
+def _generate_projects(workspace: Path, auto_dir: Path) -> None:
+    items = _load_json(workspace / "data" / "projects.json", [])
+    active = [p for p in items if p.get("status", "active") != "archived"]
+    if not active:
+        _write_auto(auto_dir / "projects.md", "# Projects\n\n(none)\n")
+        return
+
+    lines = ["# Active projects\n"]
+    for p in active[:10]:
+        name = p.get("name", "(unnamed)")
+        status = p.get("status", "")
+        lines.append(f"- **{name}**" + (f" ({status})" if status else ""))
+
+    _write_auto(auto_dir / "projects.md", "\n".join(lines) + "\n")
+
+
+def generate_auto_context(workspace: Path) -> None:
+    """Generate .claude/rules/auto/ files from workspace data.
+
+    Called at the start of every run_agent() invocation.
+    Never raises — errors are silently ignored.
+    """
+    try:
+        auto_dir = workspace / ".claude" / "rules" / "auto"
+        auto_dir.mkdir(parents=True, exist_ok=True)
+        _generate_skills(workspace, auto_dir)
+        _generate_tasks(workspace, auto_dir)
+        _generate_cron(workspace, auto_dir)
+        _generate_projects(workspace, auto_dir)
+    except Exception:
+        pass

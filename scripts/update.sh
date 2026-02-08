@@ -33,6 +33,10 @@ else
   ln -s "$ENGINE_DIR/core_tools" "$CORE_LINK"
 fi
 
+# Refresh engine rules symlink
+mkdir -p "$WORKSPACE/.claude/rules/auto"
+ln -sfn "$ENGINE_DIR/templates/context/tools.md" "$WORKSPACE/.claude/rules/tools.md"
+
 # Symlink default skills into workspace (overwrite copies with symlinks)
 mkdir -p "$WORKSPACE/.claude/skills"
 for skill in "$ENGINE_DIR/default_skills"/*.md; do

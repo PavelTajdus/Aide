@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from config import load_workspace_env, resolve_workspace
+from config import generate_auto_context, load_workspace_env, resolve_workspace
 
 
 Event = Dict[str, object]
@@ -182,6 +182,7 @@ def run_agent(
         working_dir = resolve_workspace()
 
     load_workspace_env(working_dir)
+    generate_auto_context(working_dir)
 
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
     skip_perms = os.environ.get("AIDE_CLAUDE_SKIP_PERMISSIONS", "1").strip().lower()

@@ -14,6 +14,7 @@ ENGINE_VERSION=$(cat "$ENGINE_DIR/VERSION")
 
 mkdir -p "$WORKSPACE" \
   "$WORKSPACE/.claude/skills" \
+  "$WORKSPACE/.claude/rules/auto" \
   "$WORKSPACE/tools" \
   "$WORKSPACE/knowledge" \
   "$WORKSPACE/conversations" \
@@ -21,9 +22,18 @@ mkdir -p "$WORKSPACE" \
   "$WORKSPACE/data/logs" \
   "$WORKSPACE/inbox"
 
+# CLAUDE.md — user-owned identity (copy once from template)
 if [[ ! -f "$WORKSPACE/CLAUDE.md" ]]; then
-  cp "$ENGINE_DIR/templates/CLAUDE.md" "$WORKSPACE/CLAUDE.md"
+  cp "$ENGINE_DIR/templates/context/claude.md" "$WORKSPACE/CLAUDE.md"
 fi
+
+# Channel rules — user-owned (copy once from example)
+if [[ ! -f "$WORKSPACE/.claude/rules/channel.md" ]]; then
+  cp "$ENGINE_DIR/templates/context/channel.example.md" "$WORKSPACE/.claude/rules/channel.md"
+fi
+
+# Engine rules — symlink (auto-updated on deploy)
+ln -sfn "$ENGINE_DIR/templates/context/tools.md" "$WORKSPACE/.claude/rules/tools.md"
 
 if [[ ! -f "$WORKSPACE/.gitignore" ]]; then
   cp "$ENGINE_DIR/templates/workspace.gitignore" "$WORKSPACE/.gitignore"
