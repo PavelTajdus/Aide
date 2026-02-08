@@ -153,8 +153,34 @@ def _generate_projects(workspace: Path, auto_dir: Path) -> None:
     _write_auto(auto_dir / "projects.md", "\n".join(lines) + "\n")
 
 
+def _generate_claude_md(workspace: Path) -> None:
+    """Generate top-level CLAUDE.md as a minimal auto-generated wrapper."""
+    lines = [
+        "<!-- Auto-generated at each agent run. Your config lives in .claude/rules/ -->",
+        "",
+        "# Aide",
+        "",
+        "You are Aide, a personal AI copilot.",
+        "Your full configuration is loaded from `.claude/rules/` automatically.",
+        "",
+    ]
+
+    # Inline user.md content if it exists (so CLAUDE.md shows user context)
+    user_md = workspace / ".claude" / "rules" / "user.md"
+    if user_md.exists():
+        try:
+            content = user_md.read_text(encoding="utf-8").strip()
+            if content:
+                lines.append(content)
+                lines.append("")
+        except Exception:
+            pass
+
+    (workspace / "CLAUDE.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 def generate_auto_context(workspace: Path) -> None:
-    """Generate .claude/rules/auto/ files from workspace data.
+    """Generate CLAUDE.md and .claude/rules/auto/ files from workspace data.
 
     Called at the start of every run_agent() invocation.
     Never raises — errors are silently ignored.
@@ -162,6 +188,7 @@ def generate_auto_context(workspace: Path) -> None:
     try:
         auto_dir = workspace / ".claude" / "rules" / "auto"
         auto_dir.mkdir(parents=True, exist_ok=True)
+        _generate_claude_md(workspace)
         _generate_skills(workspace, auto_dir)
         _generate_tasks(workspace, auto_dir)
         _generate_cron(workspace, auto_dir)

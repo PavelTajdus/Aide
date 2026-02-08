@@ -22,14 +22,24 @@ mkdir -p "$WORKSPACE" \
   "$WORKSPACE/data/logs" \
   "$WORKSPACE/inbox"
 
-# CLAUDE.md — user-owned identity (copy once from template)
-if [[ ! -f "$WORKSPACE/CLAUDE.md" ]]; then
-  cp "$ENGINE_DIR/templates/context/claude.md" "$WORKSPACE/CLAUDE.md"
+# Soul — persona, tone, boundaries (copy once from template)
+if [[ ! -f "$WORKSPACE/.claude/rules/soul.md" ]]; then
+  cp "$ENGINE_DIR/templates/context/soul.md" "$WORKSPACE/.claude/rules/soul.md"
+fi
+
+# User context — profile, preferences (copy once from template)
+if [[ ! -f "$WORKSPACE/.claude/rules/user.md" ]]; then
+  cp "$ENGINE_DIR/templates/context/user.md" "$WORKSPACE/.claude/rules/user.md"
 fi
 
 # Channel rules — user-owned (copy once from example)
 if [[ ! -f "$WORKSPACE/.claude/rules/channel.md" ]]; then
   cp "$ENGINE_DIR/templates/context/channel.example.md" "$WORKSPACE/.claude/rules/channel.md"
+fi
+
+# CLAUDE.md — auto-generated (created on first agent run, or minimal placeholder)
+if [[ ! -f "$WORKSPACE/CLAUDE.md" ]]; then
+  echo "# Aide" > "$WORKSPACE/CLAUDE.md"
 fi
 
 # Engine rules — symlink (auto-updated on deploy)
