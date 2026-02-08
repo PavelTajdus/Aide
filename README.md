@@ -102,8 +102,19 @@ Workspace je oddělený od engine repa — obsahuje tvoje osobní data a nikdy n
 ```
 ~/aide-workspace/
 ├── .env                          # Tokeny, API klíče
-├── CLAUDE.md                     # Osobnost a pravidla agenta
-├── .claude/skills/               # Symlinky na default_skills/ + vlastní
+├── CLAUDE.md                     # Auto-generovaný (při každém spuštění agenta)
+├── .claude/
+│   ├── rules/
+│   │   ├── soul.md               # Persona, tón, styl (user-owned, kopíruje se jednou)
+│   │   ├── user.md               # Profil uživatele, preference (user-owned)
+│   │   ├── channel.md            # Pravidla kanálu — Slack formátování (user-owned)
+│   │   ├── tools.md              # Engine pravidla (SYMLINK → engine, auto-update)
+│   │   └── auto/                 # Generováno při každém run_agent()
+│   │       ├── skills.md         # Ze .claude/skills/*.md
+│   │       ├── tasks.md          # Z data/tasks.json
+│   │       ├── cron.md           # Z data/cron.json
+│   │       └── projects.md       # Z data/projects.json
+│   └── skills/                   # Symlinky na default_skills/ + vlastní
 ├── core_tools/                   # Symlink na engine/core_tools/
 ├── tools/                        # Vlastní nástroje
 ├── knowledge/                    # Referenční dokumenty
@@ -111,6 +122,10 @@ Workspace je oddělený od engine repa — obsahuje tvoje osobní data a nikdy n
 ├── conversations/
 └── inbox/                        # Nahrané soubory z chatu
 ```
+
+Claude Code automaticky načte `CLAUDE.md` + vše z `.claude/rules/` rekurzivně. Tím agent při každém spuštění vidí aktuální kontext — otevřené úkoly, aktivní cron joby, dostupné skills.
+
+**User-owned soubory** (`soul.md`, `user.md`, `channel.md`) se kopírují jednou z templates a deploy je nikdy nepřepíše. **Engine rules** (`tools.md`) je symlink — aktualizuje se automaticky. **Auto soubory** se generují při každém volání agenta.
 
 Engine najde workspace podle: argument skriptu > env `AIDE_WORKSPACE` > aktuální adresář > `~/aide-workspace`.
 
