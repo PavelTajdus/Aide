@@ -153,8 +153,21 @@ def _generate_projects(workspace: Path, auto_dir: Path) -> None:
     _write_auto(auto_dir / "projects.md", "\n".join(lines) + "\n")
 
 
+def _is_migrated(workspace: Path) -> bool:
+    """Check if workspace uses the new modular context structure."""
+    rules = workspace / ".claude" / "rules"
+    return (rules / "soul.md").exists() or (rules / "user.md").exists()
+
+
 def _generate_claude_md(workspace: Path) -> None:
-    """Generate top-level CLAUDE.md as a minimal auto-generated wrapper."""
+    """Generate top-level CLAUDE.md as a minimal auto-generated wrapper.
+
+    Only runs if workspace has been migrated to modular context (soul.md/user.md
+    exist). Leaves legacy CLAUDE.md untouched on non-migrated workspaces.
+    """
+    if not _is_migrated(workspace):
+        return
+
     lines = [
         "<!-- Auto-generated at each agent run. Your config lives in .claude/rules/ -->",
         "",

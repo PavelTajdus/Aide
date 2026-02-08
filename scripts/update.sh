@@ -33,9 +33,20 @@ else
   ln -s "$ENGINE_DIR/core_tools" "$CORE_LINK"
 fi
 
-# Refresh engine rules symlink
+# Ensure modular context structure exists (migration for older workspaces)
 mkdir -p "$WORKSPACE/.claude/rules/auto"
 ln -sfn "$ENGINE_DIR/templates/context/tools.md" "$WORKSPACE/.claude/rules/tools.md"
+
+# Copy-once: user-owned context files (never overwrite existing)
+if [[ ! -f "$WORKSPACE/.claude/rules/soul.md" ]]; then
+  cp "$ENGINE_DIR/templates/context/soul.md" "$WORKSPACE/.claude/rules/soul.md"
+fi
+if [[ ! -f "$WORKSPACE/.claude/rules/user.md" ]]; then
+  cp "$ENGINE_DIR/templates/context/user.md" "$WORKSPACE/.claude/rules/user.md"
+fi
+if [[ ! -f "$WORKSPACE/.claude/rules/channel.md" ]]; then
+  cp "$ENGINE_DIR/templates/context/channel.example.md" "$WORKSPACE/.claude/rules/channel.md"
+fi
 
 # Symlink default skills into workspace (overwrite copies with symlinks)
 mkdir -p "$WORKSPACE/.claude/skills"
