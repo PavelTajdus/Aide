@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import json
 import os
 import time
@@ -100,13 +99,8 @@ def _heartbeat_hours() -> tuple:
     return start, end
 
 
-def _heartbeat_state_hash(overdue: List[Dict[str, Any]], upcoming: List[Dict[str, Any]]) -> str:
-    """Create a hash of the current heartbeat state for dedup."""
-    ids = sorted(
-        item["task"].get("id", item["task"].get("title", ""))
-        for item in overdue + upcoming
-    )
-    return hashlib.md5(json.dumps(ids).encode()).hexdigest()
+def _task_id(task: Dict[str, Any]) -> str:
+    return task.get("id", task.get("title", ""))
 
 
 def _execute_heartbeat_job(workspace: Path) -> None:
@@ -141,38 +135,41 @@ def _execute_heartbeat_job(workspace: Path) -> None:
         _log_line(workspace, "Heartbeat: nothing to report")
         return
 
-    # Dedup: skip if same tasks were already reported today
-    state_hash = _heartbeat_state_hash(overdue, upcoming)
+    # Dedup: only report tasks not yet reported today
     last_hb: Dict[str, Any] = {}
     try:
         last_hb = json.loads(heartbeat_path.read_text()) if heartbeat_path.exists() else {}
     except Exception:
         pass
 
-    last_hash = last_hb.get("hash")
-    last_date = last_hb.get("date")
     today = now.date().isoformat()
+    reported_ids: set = set(last_hb.get("reported_ids", [])) if last_hb.get("date") == today else set()
 
-    if last_hash == state_hash and last_date == today:
-        _log_line(workspace, "Heartbeat: already reported today, skipping")
+    new_overdue = [item for item in overdue if _task_id(item["task"]) not in reported_ids]
+    new_upcoming = [item for item in upcoming if _task_id(item["task"]) not in reported_ids]
+
+    if not new_overdue and not new_upcoming:
+        _log_line(workspace, "Heartbeat: all tasks already reported today, skipping")
         return
 
-    overdue.sort(key=lambda item: item["due"])
-    upcoming.sort(key=lambda item: item["due"])
+    new_overdue.sort(key=lambda item: item["due"])
+    new_upcoming.sort(key=lambda item: item["due"])
 
     lines: List[str] = []
-    if overdue:
-        lines.append(f"Overdue ({len(overdue)}):")
-        lines.extend(_format_task_line(item["task"], item["due"]) for item in overdue)
-    if upcoming:
-        lines.append(f"Upcoming within {soon_hours}h ({len(upcoming)}):")
-        lines.extend(_format_task_line(item["task"], item["due"]) for item in upcoming)
+    if new_overdue:
+        lines.append(f"Overdue ({len(new_overdue)}):")
+        lines.extend(_format_task_line(item["task"], item["due"]) for item in new_overdue)
+    if new_upcoming:
+        lines.append(f"Upcoming within {soon_hours}h ({len(new_upcoming)}):")
+        lines.extend(_format_task_line(item["task"], item["due"]) for item in new_upcoming)
+
+    # Track all task IDs (old + new) so we never re-report
+    all_ids = reported_ids | {_task_id(item["task"]) for item in overdue + upcoming}
 
     try:
         send_message("\n".join(lines))
-        # Save state so we don't repeat today with same tasks
         heartbeat_path.write_text(json.dumps({
-            "hash": state_hash,
+            "reported_ids": sorted(all_ids),
             "date": today,
             "sent_at": now.isoformat(),
         }))
