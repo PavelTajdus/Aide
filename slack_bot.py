@@ -337,9 +337,16 @@ def _download_file(
 def _progress_worker(
     client: WebClient,
     channel_id: str,
-    message_ts: str,
+    thread_ts: Optional[str],
     q: queue.Queue,
+    ts_holder: Dict[str, Optional[str]],
 ) -> None:
+    """Process tool-call progress updates.
+
+    Creates a progress message lazily on first tool call (no notification
+    until actual work starts). The message timestamp is stored in
+    ts_holder["ts"] so the caller can delete it after completion.
+    """
     last_update = 0.0
     last_text: Optional[str] = None
 
@@ -371,7 +378,16 @@ def _progress_worker(
             time.sleep(wait)
 
         try:
-            client.chat_update(channel=channel_id, ts=message_ts, text=pending)
+            msg_ts = ts_holder.get("ts")
+            if msg_ts:
+                client.chat_update(channel=channel_id, ts=msg_ts, text=pending)
+            else:
+                # Lazy create: first tool call creates the progress message
+                kwargs: Dict[str, Any] = {"channel": channel_id, "text": pending}
+                if thread_ts:
+                    kwargs["thread_ts"] = thread_ts
+                resp = client.chat_postMessage(**kwargs)
+                ts_holder["ts"] = resp.get("ts")
             last_text = pending
             last_update = time.time()
         except SlackApiError:
@@ -531,12 +547,6 @@ def _process_message(
 
     key = _session_key(channel_id, thread_root)
 
-    thinking_ts = _post_message(client, channel_id, "Thinking...", thread_root)
-    if not thinking_ts:
-        RUNNING.pop(key, None)
-        _process_next_in_queue(client, workspace, channel_id, thread_root, key)
-        return
-
     session_id = _get_session_id(workspace, channel_id, thread_root)
 
     def _process_cb(proc):
@@ -544,12 +554,14 @@ def _process_message(
 
     progress_q: Optional[queue.Queue] = None
     progress_thread: Optional[threading.Thread] = None
+    # Shared dict so progress worker can store the lazily-created message ts
+    progress_ts: Dict[str, Optional[str]] = {"ts": None}
 
     if _progress_enabled():
         progress_q = queue.Queue()
         progress_thread = threading.Thread(
             target=_progress_worker,
-            args=(client, channel_id, thinking_ts, progress_q),
+            args=(client, channel_id, thread_root, progress_q, progress_ts),
             daemon=True,
         )
         progress_thread.start()
@@ -573,12 +585,13 @@ def _process_message(
         )
     except Exception as exc:
         RUNNING.pop(key, None)
-        _delete_message(client, channel_id, thinking_ts)
-        _post_message(client, channel_id, f"Error: {exc}", thread_root)
         if progress_q:
             progress_q.put(None)
         if progress_thread:
             progress_thread.join(timeout=2)
+        if progress_ts["ts"]:
+            _delete_message(client, channel_id, progress_ts["ts"])
+        _post_message(client, channel_id, f"Error: {exc}", thread_root)
         # Still process queued messages after error
         _process_next_in_queue(client, workspace, channel_id, thread_root, key)
         return
@@ -600,9 +613,10 @@ def _process_message(
     answer = _mrkdwn_converter.convert(answer)
 
     chunks = _split_text(answer)
-    # Delete the "Thinking..." placeholder and post as new message
-    # so Slack sends a notification for the final answer.
-    _delete_message(client, channel_id, thinking_ts)
+    # Delete progress message and post final answer as new message
+    # so Slack sends a notification for the completed response.
+    if progress_ts["ts"]:
+        _delete_message(client, channel_id, progress_ts["ts"])
     for chunk in chunks:
         _post_message(client, channel_id, chunk, thread_root)
 
