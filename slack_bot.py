@@ -443,6 +443,7 @@ def _process_message(
     text: str,
     files: list[Dict[str, Any]],
     bot_user_id: Optional[str] = None,
+    event_ts: Optional[str] = None,
 ) -> None:
     key = _session_key(channel_id, thread_root)
     cmd = _handle_command(text)
@@ -547,6 +548,10 @@ def _process_message(
 
     key = _session_key(channel_id, thread_root)
 
+    # Add reaction to indicate we're working (no notification)
+    if event_ts:
+        _add_reaction(client, channel_id, event_ts)
+
     session_id = _get_session_id(workspace, channel_id, thread_root)
 
     def _process_cb(proc):
@@ -589,6 +594,8 @@ def _process_message(
             progress_q.put(None)
         if progress_thread:
             progress_thread.join(timeout=2)
+        if event_ts:
+            _remove_reaction(client, channel_id, event_ts)
         if progress_ts["ts"]:
             _delete_message(client, channel_id, progress_ts["ts"])
         _post_message(client, channel_id, f"Error: {exc}", thread_root)
@@ -613,8 +620,10 @@ def _process_message(
     answer = _mrkdwn_converter.convert(answer)
 
     chunks = _split_text(answer)
-    # Delete progress message and post final answer as new message
+    # Remove reaction and progress, post final answer as new message
     # so Slack sends a notification for the completed response.
+    if event_ts:
+        _remove_reaction(client, channel_id, event_ts)
     if progress_ts["ts"]:
         _delete_message(client, channel_id, progress_ts["ts"])
     for chunk in chunks:
@@ -640,17 +649,36 @@ def _process_next_in_queue(
         q.clear()
 
     # Merge all queued messages into one prompt
-    texts = [t for t, _f, _b in queued if t]
+    texts = [t for t, _f, _b, _e in queued if t]
     all_files = []
     bot_uid = None
-    for _t, f, b in queued:
+    last_event_ts = None
+    for _t, f, b, e in queued:
         all_files.extend(f)
         if b:
             bot_uid = b
+        # Remove hourglass reactions from queued messages
+        if e:
+            _remove_reaction(client, channel_id, e, "hourglass_flowing_sand")
+            last_event_ts = e
     merged_text = "\n\n".join(texts)
 
     # Process in current thread (already a daemon thread)
-    _process_message(client, workspace, channel_id, thread_root, merged_text, all_files, bot_uid)
+    _process_message(client, workspace, channel_id, thread_root, merged_text, all_files, bot_uid, last_event_ts)
+
+
+def _add_reaction(client: WebClient, channel_id: str, timestamp: str, emoji: str = "eyes") -> None:
+    try:
+        client.reactions_add(channel=channel_id, timestamp=timestamp, name=emoji)
+    except SlackApiError:
+        pass
+
+
+def _remove_reaction(client: WebClient, channel_id: str, timestamp: str, emoji: str = "eyes") -> None:
+    try:
+        client.reactions_remove(channel=channel_id, timestamp=timestamp, name=emoji)
+    except SlackApiError:
+        pass
 
 
 def _handle_event(
@@ -663,6 +691,7 @@ def _handle_event(
     user_id: Optional[str],
     text: str,
     files: list[Dict[str, Any]],
+    event_ts: Optional[str] = None,
 ) -> None:
     if not _is_allowed(user_id, allowed):
         return
@@ -673,15 +702,16 @@ def _handle_event(
     # If a process is already running for this thread, queue the message
     with THREAD_QUEUES_LOCK:
         if key in RUNNING:
-            THREAD_QUEUES.setdefault(key, []).append((cleaned, files, bot_user_id))
-            _post_message(client, channel_id, "Queued, processing after current task...", thread_root)
+            THREAD_QUEUES.setdefault(key, []).append((cleaned, files, bot_user_id, event_ts))
+            if event_ts:
+                _add_reaction(client, channel_id, event_ts, "hourglass_flowing_sand")
             return
         # Reserve the slot immediately to prevent race conditions
         RUNNING[key] = True
 
     thread = threading.Thread(
         target=_process_message,
-        args=(client, workspace, channel_id, thread_root, cleaned, files, bot_user_id),
+        args=(client, workspace, channel_id, thread_root, cleaned, files, bot_user_id, event_ts),
         daemon=True,
     )
     thread.start()
@@ -731,6 +761,7 @@ def main() -> None:
             event.get("user"),
             event.get("text", ""),
             event.get("files", []) or [],
+            event_ts=event.get("ts"),
         )
 
     @app.event("message")
@@ -757,6 +788,7 @@ def main() -> None:
                 event.get("user"),
                 event.get("text", ""),
                 event.get("files", []) or [],
+                event_ts=event.get("ts"),
             )
             return
 
@@ -781,6 +813,7 @@ def main() -> None:
                 event.get("user"),
                 event.get("text", ""),
                 event.get("files", []) or [],
+                event_ts=event.get("ts"),
             )
 
     @app.command("/new")
