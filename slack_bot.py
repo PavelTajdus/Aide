@@ -670,8 +670,8 @@ def _process_next_in_queue(
 def _add_reaction(client: WebClient, channel_id: str, timestamp: str, emoji: str = "eyes") -> None:
     try:
         client.reactions_add(channel=channel_id, timestamp=timestamp, name=emoji)
-    except SlackApiError:
-        pass
+    except SlackApiError as e:
+        print(f"[WARN] reactions_add failed: {e.response['error'] if e.response else e}")
 
 
 def _remove_reaction(client: WebClient, channel_id: str, timestamp: str, emoji: str = "eyes") -> None:
