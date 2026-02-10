@@ -4,7 +4,7 @@ Osobní AI asistent, který běží na tvém serveru a komunikuje přes Telegram
 
 ## Čím je víc než chatbot
 
-**Paměť.** Aide si automaticky ukládá důležité informace — tvoje rozhodnutí, preference, kontakty, stav projektů. Při každé nové konverzaci si relevantní fakta sám vyhledá a použije jako kontext. Nemusíš mu nic opakovat.
+**Paměť.** Aide si automaticky ukládá důležité informace — tvoje rozhodnutí, preference, kontakty, stav projektů. Backend je SQLite s FTS5 full-text vyhledáváním. Záznamy se automaticky typují (decision, contact, preference, event, project), tagují a přiřazují k projektům. Při každé nové konverzaci si relevantní fakta sám vyhledá a použije jako kontext. Nemusíš mu nic opakovat.
 
 **Vlastní nástroje.** Aide si umí napsat Python skripty, které pak používá jako nástroje. Potřebuješ napojení na API třetí strany? Automatické generování reportů? Zpracování dat? Řekneš mu co potřebuješ, on si napíše skript, uloží ho do workspace a od té doby ho používá.
 
@@ -118,7 +118,7 @@ Workspace je oddělený od engine repa — obsahuje tvoje osobní data a nikdy n
 ├── core_tools/                   # Symlink na engine/core_tools/
 ├── tools/                        # Vlastní nástroje
 ├── knowledge/                    # Referenční dokumenty
-├── data/                         # Sessions, úkoly, paměť, cron, logy
+├── data/                         # Sessions, úkoly, paměť (memory.db + .json), cron, logy
 ├── conversations/
 └── inbox/                        # Nahrané soubory z chatu
 ```
@@ -198,6 +198,41 @@ Pak stačí: `./scripts/backup.sh [workspace] --push`
 - Šablona: `templates/tool_skeleton.py`
 
 **Skills** jsou Markdown soubory v `.claude/skills/`, které popisují kdy a jak agent nástroj použije. Aide přichází s vestavěnými skills pro paměť, úkoly, research a denní přehledy.
+
+## Paměť
+
+Aide používá SQLite + FTS5 jako primární backend (`data/memory.db`). JSON soubor `data/memory.json` se automaticky synchronizuje jako backup.
+
+**Strukturované záznamy.** Každý záznam má automaticky detekovaný typ (decision, contact, preference, event, project, note), tagy, entity (jména osob) a přiřazení k projektu.
+
+**FTS5 full-text vyhledávání** s prefix matching a BM25 rankingem. Filtrování podle typu a projektu.
+
+```bash
+# Příkazy
+python3 core_tools/memory_manage.py add --text "..."
+python3 core_tools/memory_manage.py search --query "..." [--compact] [--type decision] [--project aide]
+python3 core_tools/memory_manage.py list [--compact] [--type ...] [--project ...]
+python3 core_tools/memory_manage.py get --ids "id1,id2"
+python3 core_tools/memory_manage.py forget --id "UUID"
+python3 core_tools/memory_manage.py stats
+python3 core_tools/memory_manage.py archive --days 30
+python3 core_tools/memory_manage.py migrate    # jednorázová migrace z JSON do SQLite
+```
+
+## Slack bot — architektura
+
+Bot běží přes Socket Mode (WebSocket, žádná veřejná URL). Komunikace probíhá v threadech — každý thread má vlastní Claude Code session.
+
+**Activity-based timeout.** Timeout (300s) se resetuje při každém eventu z Claude Code (tool call, text output). Agent, který aktivně pracuje, nevytimeoutuje.
+
+**Message queue.** Zprávy poslané během zpracování se řadí do per-thread fronty. Po dokončení aktuálního úkolu se všechny čekající zprávy spojí do jednoho promptu a zpracují najednou.
+
+**Auto-thread.** Když je `AIDE_SLACK_AUTO_THREAD=1`, bot odpovídá na zprávy ve vlákně bez nutnosti @mention (po prvním @mention, který vytvoří session).
+
+| Proměnná | Popis |
+|----------|-------|
+| `AIDE_SLACK_AUTO_THREAD` | `1` = odpovídej ve vlákně bez mention |
+| `AIDE_SLACK_PROGRESS` | `1` = stavové updaty (tool calls) během běhu |
 
 ## Troubleshooting
 
