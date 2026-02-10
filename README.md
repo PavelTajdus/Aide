@@ -225,7 +225,16 @@ Bot běží přes Socket Mode (WebSocket, žádná veřejná URL). Komunikace pr
 
 **Activity-based timeout.** Timeout (300s) se resetuje při každém eventu z Claude Code (tool call, text output). Agent, který aktivně pracuje, nevytimeoutuje.
 
-**Message queue.** Zprávy poslané během zpracování se řadí do per-thread fronty. Po dokončení aktuálního úkolu se všechny čekající zprávy spojí do jednoho promptu a zpracují najednou.
+**Message queue.** Zprávy poslané během zpracování se řadí do per-thread fronty. Po dokončení aktuálního úkolu se všechny čekající zprávy spojí do jednoho promptu a zpracují najednou. Zprávy zařazené do fronty dostanou reakci :hourglass_flowing_sand:.
+
+**Notifikace a progress.** Bot je navržený tak, aby uživatel dostal jednu notifikaci — až když je odpověď hotová.
+
+1. Uživatel pošle zprávu → bot přidá reakci :eyes: (tichá indikace, žádná notifikace).
+2. Při prvním tool callu se vytvoří progress zpráva ("Pracuji na tom...") přes `chat_update` existující zprávy — tím se vyhneme notifikaci na startu.
+3. Během zpracování se progress zpráva aktualizuje s názvy nástrojů (pokud `AIDE_SLACK_PROGRESS=1`).
+4. Po dokončení: progress zpráva se smaže, reakce :eyes: se odebere a finální odpověď se pošle jako nová zpráva (`chat_postMessage`) — teprve ta generuje notifikaci.
+
+Tento flow zajišťuje, že uživatel dostane push notifikaci jen jednou, až je odpověď skutečně hotová.
 
 **Auto-thread.** Když je `AIDE_SLACK_AUTO_THREAD=1`, bot odpovídá na zprávy ve vlákně bez nutnosti @mention (po prvním @mention, který vytvoří session).
 
@@ -233,6 +242,8 @@ Bot běží přes Socket Mode (WebSocket, žádná veřejná URL). Komunikace pr
 |----------|-------|
 | `AIDE_SLACK_AUTO_THREAD` | `1` = odpovídej ve vlákně bez mention |
 | `AIDE_SLACK_PROGRESS` | `1` = stavové updaty (tool calls) během běhu |
+
+**Požadované OAuth scopes:** `chat:write`, `reactions:write`, `reactions:read`, `files:read`, `files:write`, `app_mentions:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`.
 
 ## Troubleshooting
 
