@@ -213,11 +213,11 @@ def run_agent(
     new_session_id: Optional[str] = None
     raw_lines: List[str] = []
 
-    start = time.time()
+    last_activity = time.time()
     while True:
-        if timeout_s and (time.time() - start) > timeout_s:
+        if timeout_s and (time.time() - last_activity) > timeout_s:
             proc.terminate()
-            raise TimeoutError("Claude Code CLI timed out.")
+            raise TimeoutError("Claude Code CLI timed out (no activity).")
 
         line = proc.stdout.readline() if proc.stdout else ""
         if line == "":
@@ -232,6 +232,7 @@ def run_agent(
                 raw_lines.append(line.rstrip("\n"))
             continue
 
+        last_activity = time.time()
         etype = _event_type(evt)
 
         # Debug: log all events to see what Claude CLI sends

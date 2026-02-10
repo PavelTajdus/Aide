@@ -59,6 +59,10 @@ def _tables_to_codeblocks(text: str) -> str:
 
 
 RUNNING: Dict[str, Any] = {}
+# Per-thread message queue: key -> deque of (text, files, bot_user_id) tuples
+THREAD_QUEUES: Dict[str, list] = {}
+# Lock for THREAD_QUEUES access
+THREAD_QUEUES_LOCK = threading.Lock()
 
 
 def _sessions_path(workspace: Path) -> Path:
@@ -408,6 +412,13 @@ def _update_message(client: WebClient, channel_id: str, message_ts: str, text: s
         return
 
 
+def _delete_message(client: WebClient, channel_id: str, message_ts: str) -> None:
+    try:
+        client.chat_delete(channel=channel_id, ts=message_ts)
+    except SlackApiError:
+        return
+
+
 def _process_message(
     client: WebClient,
     workspace: Path,
@@ -428,11 +439,15 @@ def _process_message(
         if not proc:
             _post_message(client, channel_id, "No session running.", thread_root)
             return
-        proc.terminate()
-        try:
-            proc.wait(timeout=2)
-        except Exception:
-            proc.kill()
+        # Clear queued messages too
+        with THREAD_QUEUES_LOCK:
+            THREAD_QUEUES.pop(key, None)
+        if hasattr(proc, "terminate"):
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                proc.kill()
         RUNNING.pop(key, None)
         _post_message(client, channel_id, "Session stopped.", thread_root)
         return
@@ -507,13 +522,25 @@ def _process_message(
         if thread_context:
             prompt = f"{thread_context}\nCurrent message:\n{prompt}"
 
+    key = _session_key(channel_id, thread_root)
+
+    # Check if a queued message supersedes this one
+    def _get_latest_prompt():
+        """Pop all queued messages and return the latest (discard intermediate ones)."""
+        with THREAD_QUEUES_LOCK:
+            q = THREAD_QUEUES.get(key, [])
+            if not q:
+                return None, None, None
+            # Take the last queued message, discard the rest
+            latest_text, latest_files, latest_bot_uid = q[-1]
+            q.clear()
+        return latest_text, latest_files, latest_bot_uid
+
     thinking_ts = _post_message(client, channel_id, "Thinking...", thread_root)
     if not thinking_ts:
         return
 
     session_id = _get_session_id(workspace, channel_id, thread_root)
-
-    key = _session_key(channel_id, thread_root)
 
     def _process_cb(proc):
         RUNNING[key] = proc
@@ -554,6 +581,8 @@ def _process_message(
             progress_q.put(None)
         if progress_thread:
             progress_thread.join(timeout=2)
+        # Still process queued messages after error
+        _process_next_in_queue(client, workspace, channel_id, thread_root, key)
         return
 
     if progress_q:
@@ -578,6 +607,38 @@ def _process_message(
     for chunk in chunks[1:]:
         _post_message(client, channel_id, chunk, thread_root)
 
+    # Process next queued message if any
+    _process_next_in_queue(client, workspace, channel_id, thread_root, key)
+
+
+def _process_next_in_queue(
+    client: WebClient,
+    workspace: Path,
+    channel_id: str,
+    thread_root: Optional[str],
+    key: str,
+) -> None:
+    """Check queue and process next queued messages if any. Merges all into one prompt."""
+    with THREAD_QUEUES_LOCK:
+        q = THREAD_QUEUES.get(key, [])
+        if not q:
+            return
+        queued = list(q)
+        q.clear()
+
+    # Merge all queued messages into one prompt
+    texts = [t for t, _f, _b in queued if t]
+    all_files = []
+    bot_uid = None
+    for _t, f, b in queued:
+        all_files.extend(f)
+        if b:
+            bot_uid = b
+    merged_text = "\n\n".join(texts)
+
+    # Process in current thread (already a daemon thread)
+    _process_message(client, workspace, channel_id, thread_root, merged_text, all_files, bot_uid)
+
 
 def _handle_event(
     client: WebClient,
@@ -594,6 +655,16 @@ def _handle_event(
         return
 
     cleaned = _strip_mention(text, bot_user_id)
+    key = _session_key(channel_id, thread_root)
+
+    # If a process is already running for this thread, queue the message
+    with THREAD_QUEUES_LOCK:
+        if key in RUNNING:
+            THREAD_QUEUES.setdefault(key, []).append((cleaned, files, bot_user_id))
+            _post_message(client, channel_id, "Queued, processing after current task...", thread_root)
+            return
+        # Reserve the slot immediately to prevent race conditions
+        RUNNING[key] = True
 
     thread = threading.Thread(
         target=_process_message,
@@ -681,6 +752,9 @@ def main() -> None:
             thread_ts = event.get("thread_ts")
             if not thread_ts:
                 return  # not a thread reply – ignore
+            # Skip if message contains @mention – handle_mention already handles it
+            if bot_user_id and f"<@{bot_user_id}>" in (event.get("text") or ""):
+                return
             # Only respond if we already have a session for this thread
             if not _get_session_id(workspace, channel_id, thread_ts):
                 return
@@ -723,10 +797,14 @@ def main() -> None:
         # Kill any running agent process for this channel
         stopped = False
         for key, proc in list(RUNNING.items()):
-            if key.startswith(f"{channel_id}:") and proc.poll() is None:
+            if not key.startswith(f"{channel_id}:"):
+                continue
+            if hasattr(proc, "poll") and proc.poll() is None:
                 proc.terminate()
-                RUNNING.pop(key, None)
-                stopped = True
+            RUNNING.pop(key, None)
+            with THREAD_QUEUES_LOCK:
+                THREAD_QUEUES.pop(key, None)
+            stopped = True
         if stopped:
             _post_message(client, channel_id, "Agent stopped.")
         else:
