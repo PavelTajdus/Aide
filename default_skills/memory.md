@@ -28,20 +28,51 @@ On the first message in a new thread/conversation:
 ```
 python $AIDE_ENGINE/core_tools/memory_manage.py add --text "..."
 ```
+Optional flags:
+- `--type decision|contact|project|event|preference` — override auto-detected type
+- `--tags "finance,seo"` — override auto-detected tags
+- `--project "acg-stores"` — override auto-detected project
 
-### Search
+### Search (two-layer retrieval)
+Step 1 — compact index (~50 tokens/result):
+```
+python $AIDE_ENGINE/core_tools/memory_manage.py search --query "..." --compact
+```
+Step 2 — full details for selected IDs:
+```
+python $AIDE_ENGINE/core_tools/memory_manage.py get --ids "id1,id2,id3"
+```
+Full search (backwards compatible):
 ```
 python $AIDE_ENGINE/core_tools/memory_manage.py search --query "..."
 ```
+Filter options: `--type`, `--project`, `--limit N`
 
 ### List
 ```
 python $AIDE_ENGINE/core_tools/memory_manage.py list
+python $AIDE_ENGINE/core_tools/memory_manage.py list --compact
+python $AIDE_ENGINE/core_tools/memory_manage.py list --type decision --project acg-stores
+```
+
+### Stats
+```
+python $AIDE_ENGINE/core_tools/memory_manage.py stats
 ```
 
 ### Delete
 ```
 python $AIDE_ENGINE/core_tools/memory_manage.py forget --id "UUID"
+```
+
+### Archive (move old memories)
+```
+python $AIDE_ENGINE/core_tools/memory_manage.py archive --days 30
+```
+
+### Migrate (JSON → SQLite, one-time)
+```
+python $AIDE_ENGINE/core_tools/memory_manage.py migrate
 ```
 
 ## What NOT to save
