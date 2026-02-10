@@ -428,15 +428,18 @@ def _process_message(
     files: list[Dict[str, Any]],
     bot_user_id: Optional[str] = None,
 ) -> None:
+    key = _session_key(channel_id, thread_root)
     cmd = _handle_command(text)
     if cmd == "new":
         _set_session_id(workspace, channel_id, thread_root, None)
+        RUNNING.pop(key, None)
         _post_message(client, channel_id, "New session created.", thread_root)
+        _process_next_in_queue(client, workspace, channel_id, thread_root, key)
         return
     if cmd == "stop":
-        key = _session_key(channel_id, thread_root)
         proc = RUNNING.get(key)
         if not proc:
+            RUNNING.pop(key, None)
             _post_message(client, channel_id, "No session running.", thread_root)
             return
         # Clear queued messages too
@@ -506,10 +509,14 @@ def _process_message(
         warning = f"Attachment too large (max {int(max_mb)} MB), not downloaded."
         if not prompt:
             _post_message(client, channel_id, warning, thread_root)
+            RUNNING.pop(key, None)
+            _process_next_in_queue(client, workspace, channel_id, thread_root, key)
             return
         _post_message(client, channel_id, warning, thread_root)
     if not prompt:
         _post_message(client, channel_id, "No text or attachment received.", thread_root)
+        RUNNING.pop(key, None)
+        _process_next_in_queue(client, workspace, channel_id, thread_root, key)
         return
 
     # Fetch thread history for context (exclude the last message which is current prompt)
@@ -524,20 +531,10 @@ def _process_message(
 
     key = _session_key(channel_id, thread_root)
 
-    # Check if a queued message supersedes this one
-    def _get_latest_prompt():
-        """Pop all queued messages and return the latest (discard intermediate ones)."""
-        with THREAD_QUEUES_LOCK:
-            q = THREAD_QUEUES.get(key, [])
-            if not q:
-                return None, None, None
-            # Take the last queued message, discard the rest
-            latest_text, latest_files, latest_bot_uid = q[-1]
-            q.clear()
-        return latest_text, latest_files, latest_bot_uid
-
     thinking_ts = _post_message(client, channel_id, "Thinking...", thread_root)
     if not thinking_ts:
+        RUNNING.pop(key, None)
+        _process_next_in_queue(client, workspace, channel_id, thread_root, key)
         return
 
     session_id = _get_session_id(workspace, channel_id, thread_root)
