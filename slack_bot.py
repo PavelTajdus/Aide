@@ -573,7 +573,8 @@ def _process_message(
         )
     except Exception as exc:
         RUNNING.pop(key, None)
-        _update_message(client, channel_id, thinking_ts, f"Error: {exc}")
+        _delete_message(client, channel_id, thinking_ts)
+        _post_message(client, channel_id, f"Error: {exc}", thread_root)
         if progress_q:
             progress_q.put(None)
         if progress_thread:
@@ -599,9 +600,10 @@ def _process_message(
     answer = _mrkdwn_converter.convert(answer)
 
     chunks = _split_text(answer)
-    _update_message(client, channel_id, thinking_ts, chunks[0])
-
-    for chunk in chunks[1:]:
+    # Delete the "Thinking..." placeholder and post as new message
+    # so Slack sends a notification for the final answer.
+    _delete_message(client, channel_id, thinking_ts)
+    for chunk in chunks:
         _post_message(client, channel_id, chunk, thread_root)
 
     # Process next queued message if any
