@@ -76,6 +76,14 @@ def _tables_to_codeblocks(text: str) -> str:
     return "\n".join(result)
 
 
+def _normalize_escaped_markdown(text: str) -> str:
+    """Normalize model-emitted escaped markdown before mrkdwn conversion."""
+    if not text:
+        return text
+    # Common issue: assistant returns escaped code fences/inline-code markers like \`path\`
+    return text.replace("\\`", "`")
+
+
 RUNNING: Dict[str, Any] = {}
 # Per-thread metadata: key -> {started_at: float, last_tool: str, last_tool_at: float, prompt_preview: str}
 RUNNING_META: Dict[str, Dict[str, Any]] = {}
@@ -900,6 +908,7 @@ def _process_message(
 
     # Convert tables to code blocks, then Markdown to Slack mrkdwn
     answer = _tables_to_codeblocks(answer)
+    answer = _normalize_escaped_markdown(answer)
     answer = _mrkdwn_converter.convert(answer)
 
     chunks = _split_text(answer)
