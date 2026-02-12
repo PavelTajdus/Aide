@@ -1,3 +1,15 @@
+"""Aide agent runner — backend-agnostic subprocess wrapper.
+
+Public API (unchanged):
+    run_agent(prompt, session_id, working_dir, timeout_s, process_cb, tool_cb)
+        -> (answer_text, session_id, tool_log)
+
+    get_session_usage(session_id, working_dir, timeout_s)
+        -> dict | None
+
+Backend is selected via AIDE_BACKEND env var (default: claude-code).
+"""
+
 import argparse
 import json
 import os
@@ -6,10 +18,11 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from config import generate_auto_context, load_workspace_env, resolve_workspace
-
+from backends import get_backend
+from config import load_workspace_env, resolve_workspace
 
 Event = Dict[str, object]
+ToolInfo = Dict[str, object]
 
 
 def _parse_json_line(line: str) -> Optional[Event]:
@@ -22,131 +35,21 @@ def _parse_json_line(line: str) -> Optional[Event]:
         return None
 
 
-def _event_type(evt: Event) -> Optional[str]:
-    for key in ("type", "event"):
-        if key in evt and isinstance(evt[key], str):
-            return evt[key]
-    return None
-
-
-def _extract_text(evt: Event) -> Optional[str]:
-    # Common fields
-    text = evt.get("text")
-    if isinstance(text, str):
-        return text
-
-    # Result field (Claude CLI result event)
-    result = evt.get("result")
-    if isinstance(result, str):
-        return result
-
-    # Delta-based streaming
-    delta = evt.get("delta")
-    if isinstance(delta, dict):
-        dt = delta.get("text")
-        if isinstance(dt, str):
-            return dt
-        if isinstance(delta.get("text_delta"), str):
-            return delta.get("text_delta")
-        if isinstance(delta.get("value"), str):
-            return delta.get("value")
-
-    # Content arrays
-    content = evt.get("content")
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
-                parts.append(item["text"])
-        if parts:
-            return "".join(parts)
-
-    # Message wrapper
-    message = evt.get("message")
-    if isinstance(message, dict):
-        content = message.get("content")
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
-                    parts.append(item["text"])
-            if parts:
-                return "".join(parts)
-
-    return None
-
-
-ToolInfo = Dict[str, object]
-
-
-def _extract_tool_info(block: Dict) -> Optional[ToolInfo]:
-    """Extract tool name and input from a tool_use block."""
-    name = block.get("name") or block.get("tool_name") or block.get("tool")
-    if not isinstance(name, str):
-        return None
-    return {"name": name, "input": block.get("input", {})}
-
-
-def _extract_tools_from_event(evt: Event) -> List[ToolInfo]:
-    """Extract all tool info from an event."""
-    tools: List[ToolInfo] = []
-    seen_names: set = set()
-
-    # Check message.content for tool_use blocks (Claude CLI format)
-    message = evt.get("message")
-    if isinstance(message, dict):
-        content = message.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_use":
-                    info = _extract_tool_info(block)
-                    if info and info["name"] not in seen_names:
-                        tools.append(info)
-                        seen_names.add(info["name"])
-
-    # Check for tool_use key directly
-    tool_use = evt.get("tool_use")
-    if isinstance(tool_use, dict):
-        info = _extract_tool_info(tool_use)
-        if info and info["name"] not in seen_names:
-            tools.append(info)
-            seen_names.add(info["name"])
-    elif isinstance(tool_use, list):
-        for item in tool_use:
-            if isinstance(item, dict):
-                info = _extract_tool_info(item)
-                if info and info["name"] not in seen_names:
-                    tools.append(info)
-                    seen_names.add(info["name"])
-
-    # Check for content blocks with tool_use type at top level
-    content = evt.get("content")
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                info = _extract_tool_info(block)
-                if info and info["name"] not in seen_names:
-                    tools.append(info)
-                    seen_names.add(info["name"])
-
-    return tools
-
-
 def get_session_usage(
     session_id: str,
     working_dir: Optional[Path] = None,
     timeout_s: int = 30,
 ) -> Optional[Dict]:
-    """Get usage info for a session by sending a minimal prompt."""
+    """Get usage info for a session (backend-dependent)."""
     if working_dir is None:
         working_dir = resolve_workspace()
 
     load_workspace_env(working_dir)
+    backend = get_backend()
 
-    cmd = ["claude", "-p", "--output-format", "json", "--resume", session_id, "Reply only: ok"]
-    skip_perms = os.environ.get("AIDE_CLAUDE_SKIP_PERMISSIONS", "1").strip().lower()
-    if skip_perms in ("1", "true", "yes", "on"):
-        cmd.append("--dangerously-skip-permissions")
+    cmd = backend.build_usage_cmd(session_id, working_dir)
+    if cmd is None:
+        return None
 
     try:
         result = subprocess.run(
@@ -159,14 +62,11 @@ def get_session_usage(
         )
         if result.returncode != 0:
             return None
-        data = json.loads(result.stdout)
-        return {
-            "session_id": session_id,
-            "usage": data.get("usage", {}),
-            "model_usage": data.get("modelUsage", {}),
-            "cost_usd": data.get("total_cost_usd", 0),
-        }
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+        parsed = backend.parse_usage_output(result.stdout)
+        if parsed:
+            parsed["session_id"] = session_id
+        return parsed
+    except (subprocess.TimeoutExpired, Exception):
         return None
 
 
@@ -182,15 +82,11 @@ def run_agent(
         working_dir = resolve_workspace()
 
     load_workspace_env(working_dir)
-    generate_auto_context(working_dir)
 
-    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
-    skip_perms = os.environ.get("AIDE_CLAUDE_SKIP_PERMISSIONS", "1").strip().lower()
-    if skip_perms in ("1", "true", "yes", "on"):
-        cmd.append("--dangerously-skip-permissions")
-    if session_id:
-        cmd.extend(["--resume", session_id])
-    cmd.append(prompt)
+    backend = get_backend()
+    backend.gen_context(working_dir)
+
+    cmd = backend.build_cmd(prompt, session_id, working_dir)
 
     proc = subprocess.Popen(
         cmd,
@@ -217,7 +113,11 @@ def run_agent(
     while True:
         if timeout_s and (time.time() - last_activity) > timeout_s:
             proc.terminate()
-            raise TimeoutError("Claude Code CLI timed out (no activity).")
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            raise TimeoutError("Agent CLI timed out (no activity).")
 
         line = proc.stdout.readline() if proc.stdout else ""
         if line == "":
@@ -230,40 +130,38 @@ def run_agent(
         if not evt:
             if line.strip():
                 raw_lines.append(line.rstrip("\n"))
+                last_activity = time.time()
             continue
 
         last_activity = time.time()
-        etype = _event_type(evt)
+        parsed = backend.parse_event(evt)
 
-        # Debug: log all events to see what Claude CLI sends
+        p_type = parsed.get("type", "ignore")
+        p_text = parsed.get("text")
+        p_sid = parsed.get("session_id")
+        p_tools = parsed.get("tools") or []
+
         if os.environ.get("AIDE_DEBUG_EVENTS"):
-            print(f"[DEBUG] Event type={etype}, keys={list(evt.keys())}")
+            print(f"[DEBUG] backend={os.environ.get('AIDE_BACKEND', 'claude-code')} "
+                  f"type={p_type}, raw_keys={list(evt.keys())}")
 
-        if etype in ("system", "session"):
-            sid = evt.get("session_id") or evt.get("session")
-            if isinstance(sid, str):
-                new_session_id = sid
+        if p_sid:
+            new_session_id = p_sid
 
-        text = _extract_text(evt)
-        if text:
-            assistant_chunks.append(text)
-            post_tool_chunks.append(text)
+        if p_text:
+            assistant_chunks.append(p_text)
+            post_tool_chunks.append(p_text)
 
-        # Detect and extract tool use info
-        tools_found = _extract_tools_from_event(evt)
-
-        if tools_found:
+        if p_tools:
             saw_tool_use = True
             post_tool_chunks.clear()
             tool_log.append(evt)
             if tool_cb:
-                for tool_info in tools_found:
+                for tool_info in p_tools:
                     tool_cb(tool_info["name"], tool_info.get("input", {}))
 
-        if etype in ("result", "final", "message_stop"):
-            text = _extract_text(evt)
-            if text:
-                final_text = text
+        if p_type == "result" and p_text:
+            final_text = p_text
 
     if proc.poll() is None:
         proc.wait(timeout=5)
@@ -290,14 +188,21 @@ def run_agent(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Claude Code CLI as Aide agent.")
+    parser = argparse.ArgumentParser(description="Run Aide agent (backend-agnostic).")
     parser.add_argument("prompt", help="Prompt to send")
     parser.add_argument("--session", dest="session_id", default=None)
     parser.add_argument("--workspace", dest="workspace", default=None)
+    parser.add_argument("--backend", dest="backend", default=None,
+                        help="Backend: claude-code, codex")
     args = parser.parse_args()
 
+    if args.backend:
+        os.environ["AIDE_BACKEND"] = args.backend
+
     working_dir = resolve_workspace(args.workspace)
-    answer, sid, _tool_log = run_agent(args.prompt, session_id=args.session_id, working_dir=working_dir)
+    answer, sid, _tool_log = run_agent(
+        args.prompt, session_id=args.session_id, working_dir=working_dir
+    )
     if sid:
         print(f"[session_id] {sid}")
     print(answer)

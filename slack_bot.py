@@ -1,10 +1,13 @@
 import argparse
+import json
 import os
 import queue
 import re
 import shutil
+import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 from urllib import request
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -59,6 +62,8 @@ def _tables_to_codeblocks(text: str) -> str:
 
 
 RUNNING: Dict[str, Any] = {}
+# Per-thread metadata: key -> {started_at: float, last_tool: str, last_tool_at: float, prompt_preview: str}
+RUNNING_META: Dict[str, Dict[str, Any]] = {}
 # Per-thread message queue: key -> deque of (text, files, bot_user_id) tuples
 THREAD_QUEUES: Dict[str, list] = {}
 # Lock for THREAD_QUEUES access
@@ -227,10 +232,28 @@ def _format_thread_context(history: list[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _truncate(text: str, max_len: int = 60) -> str:
+def _truncate(text: str, max_len: int = 90) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 3] + "..."
+
+
+def _normalize_shell_command(cmd: str) -> str:
+    """Extract inner command from common shell wrappers."""
+    cmd = (cmd or "").strip()
+    patterns = (
+        r"^/bin/(?:ba)?sh\s+-lc\s+'(.+)'$",
+        r'^/bin/(?:ba)?sh\s+-lc\s+"(.+)"$',
+        r"^bash\s+-lc\s+'(.+)'$",
+        r'^bash\s+-lc\s+"(.+)"$',
+        r"^sh\s+-lc\s+'(.+)'$",
+        r'^sh\s+-lc\s+"(.+)"$',
+    )
+    for pat in patterns:
+        m = re.match(pat, cmd)
+        if m:
+            return m.group(1)
+    return cmd
 
 
 def _progress_text(tool_name: str, tool_input: Optional[Dict[str, Any]] = None) -> str:
@@ -279,11 +302,26 @@ def _progress_text(tool_name: str, tool_input: Optional[Dict[str, Any]] = None) 
         return "Edit…"
 
     # Bash - show command
-    if name == "bash":
+    if name in ("bash", "shell"):
         cmd = inp.get("command", "")
         if cmd:
-            return f"Bash: {_truncate(cmd)}"
-        return "Bash…"
+            pretty = _normalize_shell_command(str(cmd))
+            return f"Shell: {_truncate(pretty)}"
+        return "Shell…"
+
+    # Codex thinking
+    if name == "thinking":
+        text = str(inp.get("text", "")).strip()
+        if text:
+            return f"Thinking: {_truncate(text)}"
+        return "Thinking…"
+
+    # Assistant short status update
+    if name in ("assistant_status", "status"):
+        text = str(inp.get("text", "")).strip()
+        if text:
+            return _truncate(text, 140)
+        return "Processing…"
 
     # Grep - show pattern
     if name == "grep":
@@ -450,6 +488,7 @@ def _process_message(
     if cmd == "new":
         _set_session_id(workspace, channel_id, thread_root, None)
         RUNNING.pop(key, None)
+        RUNNING_META.pop(key, None)
         _post_message(client, channel_id, "New session created.", thread_root)
         _process_next_in_queue(client, workspace, channel_id, thread_root, key)
         return
@@ -457,6 +496,7 @@ def _process_message(
         proc = RUNNING.get(key)
         if not proc:
             RUNNING.pop(key, None)
+            RUNNING_META.pop(key, None)
             _post_message(client, channel_id, "No session running.", thread_root)
             return
         # Clear queued messages too
@@ -469,6 +509,7 @@ def _process_message(
             except Exception:
                 proc.kill()
         RUNNING.pop(key, None)
+        RUNNING_META.pop(key, None)
         _post_message(client, channel_id, "Session stopped.", thread_root)
         return
     if cmd == "session":
@@ -527,12 +568,14 @@ def _process_message(
         if not prompt:
             _post_message(client, channel_id, warning, thread_root)
             RUNNING.pop(key, None)
+            RUNNING_META.pop(key, None)
             _process_next_in_queue(client, workspace, channel_id, thread_root, key)
             return
         _post_message(client, channel_id, warning, thread_root)
     if not prompt:
         _post_message(client, channel_id, "No text or attachment received.", thread_root)
         RUNNING.pop(key, None)
+        RUNNING_META.pop(key, None)
         _process_next_in_queue(client, workspace, channel_id, thread_root, key)
         return
 
@@ -572,13 +615,20 @@ def _process_message(
         progress_thread.start()
 
         def _tool_cb(name: str, inp: Dict[str, Any]) -> None:
+            meta = RUNNING_META.get(key)
+            if meta:
+                meta["last_tool"] = _progress_text(name, inp)
+                meta["last_tool_at"] = time.time()
             if not progress_q:
                 return
             progress_q.put(_progress_text(name, inp))
     else:
 
         def _tool_cb(name: str, inp: Dict[str, Any]) -> None:
-            return
+            meta = RUNNING_META.get(key)
+            if meta:
+                meta["last_tool"] = _progress_text(name, inp)
+                meta["last_tool_at"] = time.time()
 
     try:
         answer, new_session_id, _tool_log = run_agent(
@@ -590,6 +640,7 @@ def _process_message(
         )
     except Exception as exc:
         RUNNING.pop(key, None)
+        RUNNING_META.pop(key, None)
         if progress_q:
             progress_q.put(None)
         if progress_thread:
@@ -609,6 +660,7 @@ def _process_message(
         progress_thread.join(timeout=2)
 
     RUNNING.pop(key, None)
+    RUNNING_META.pop(key, None)
 
     if new_session_id:
         _set_session_id(workspace, channel_id, thread_root, new_session_id)
@@ -708,6 +760,12 @@ def _handle_event(
             return
         # Reserve the slot immediately to prevent race conditions
         RUNNING[key] = True
+        RUNNING_META[key] = {
+            "started_at": time.time(),
+            "last_tool": None,
+            "last_tool_at": None,
+            "prompt_preview": cleaned[:80] if cleaned else "",
+        }
 
     thread = threading.Thread(
         target=_process_message,
@@ -848,6 +906,7 @@ def main() -> None:
             if hasattr(proc, "poll") and proc.poll() is None:
                 proc.terminate()
             RUNNING.pop(key, None)
+            RUNNING_META.pop(key, None)
             with THREAD_QUEUES_LOCK:
                 THREAD_QUEUES.pop(key, None)
             stopped = True
@@ -905,6 +964,107 @@ def main() -> None:
             )
 
         _post_message(client, channel_id, "\n\n".join(messages))
+
+    @app.command("/alive")
+    def handle_alive_command(ack, body, logger):
+        ack()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not _is_allowed(user_id, allowed):
+            return
+
+        lines = []
+
+        # 1. Process status (systemd or ps)
+        services = {"aide-bot": "unknown", "aide-slack": "unknown", "aide-scheduler": "unknown"}
+        try:
+            for svc in services:
+                result = subprocess.run(
+                    ["systemctl", "is-active", svc],
+                    capture_output=True, text=True, timeout=5,
+                )
+                services[svc] = result.stdout.strip() or "inactive"
+        except Exception:
+            # Fallback: check via ps
+            for svc in services:
+                services[svc] = "?"
+
+        svc_statuses = []
+        for svc, state in services.items():
+            short = svc.replace("aide-", "")
+            icon = "OK" if state == "active" else state.upper()
+            svc_statuses.append(f"{short}: {icon}")
+        lines.append(f"*Services:* {', '.join(svc_statuses)}")
+
+        # 2. Last heartbeat
+        hb_path = workspace / "data" / "last_heartbeat.json"
+        try:
+            with open(hb_path) as f:
+                hb = json.load(f)
+            sent_at = hb.get("sent_at", "")
+            if sent_at:
+                hb_time = datetime.fromisoformat(sent_at)
+                if hb_time.tzinfo is None:
+                    hb_time = hb_time.replace(tzinfo=timezone.utc)
+                ago = datetime.now(timezone.utc) - hb_time
+                mins = int(ago.total_seconds() // 60)
+                if mins < 60:
+                    lines.append(f"*Heartbeat:* pred {mins} min")
+                else:
+                    hours = mins // 60
+                    lines.append(f"*Heartbeat:* pred {hours} hod")
+            else:
+                lines.append("*Heartbeat:* no data")
+        except Exception:
+            lines.append("*Heartbeat:* no data")
+
+        # 3. Running agents (what's Aide doing right now?)
+        now = time.time()
+        if RUNNING:
+            active = []
+            for rkey, proc in list(RUNNING.items()):
+                is_alive = True
+                if hasattr(proc, "poll"):
+                    is_alive = proc.poll() is None
+                elif proc is True:
+                    is_alive = True
+
+                if not is_alive:
+                    continue
+
+                meta = RUNNING_META.get(rkey, {})
+                elapsed = now - meta.get("started_at", now)
+                elapsed_str = f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
+
+                last_tool = meta.get("last_tool")
+                last_tool_at = meta.get("last_tool_at")
+                prompt_preview = meta.get("prompt_preview", "")
+
+                detail = f"Running {elapsed_str}"
+                if last_tool:
+                    tool_ago = int(now - last_tool_at) if last_tool_at else 0
+                    detail += f" | last: {last_tool} ({tool_ago}s ago)"
+                if prompt_preview:
+                    detail += f"\n  _\"{prompt_preview}\"_"
+
+                active.append(detail)
+
+            if active:
+                lines.append(f"*Agents:* {len(active)} running")
+                for a in active[:5]:
+                    lines.append(f"  {a}")
+            else:
+                lines.append("*Agents:* idle")
+        else:
+            lines.append("*Agents:* idle")
+
+        # 4. Queued messages
+        with THREAD_QUEUES_LOCK:
+            total_queued = sum(len(q) for q in THREAD_QUEUES.values())
+        if total_queued:
+            lines.append(f"*Queued:* {total_queued} message(s)")
+
+        _post_message(client, channel_id, "\n".join(lines))
 
     SocketModeHandler(app, app_token).start()
 
