@@ -24,8 +24,10 @@ def build_cmd(
     prompt: str,
     session_id: Optional[str] = None,
     working_dir: Optional[Path] = None,
+    backend_options: Optional[Dict[str, Any]] = None,
 ) -> list[str]:
     """Build the ``claude`` CLI command list."""
+    _ = backend_options  # Reserved for backend-agnostic runtime overrides.
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
 
     skip = os.environ.get("AIDE_CLAUDE_SKIP_PERMISSIONS", "1").strip().lower()

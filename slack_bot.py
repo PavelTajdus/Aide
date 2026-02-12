@@ -24,6 +24,21 @@ from markdown_to_mrkdwn import SlackMarkdownConverter
 from context import log_conversation
 
 _mrkdwn_converter = SlackMarkdownConverter()
+_ALLOWED_REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh"}
+
+
+def _normalize_effort(value: str) -> Optional[str]:
+    raw = (value or "").strip().lower().replace("_", " ").replace("-", " ")
+    raw = " ".join(raw.split())
+    if raw in _ALLOWED_REASONING_EFFORTS:
+        return raw
+    aliases = {
+        "extra high": "xhigh",
+        "extrahigh": "xhigh",
+        "ultra high": "xhigh",
+        "ultrahigh": "xhigh",
+    }
+    return aliases.get(raw)
 
 
 def _tables_to_codeblocks(text: str) -> str:
@@ -74,6 +89,10 @@ def _sessions_path(workspace: Path) -> Path:
     return workspace / "data" / "sessions_slack.json"
 
 
+def _session_options_path(workspace: Path) -> Path:
+    return workspace / "data" / "sessions_slack_options.json"
+
+
 def _session_key(channel_id: str, thread_ts: Optional[str]) -> str:
     return f"{channel_id}:{thread_ts or 'root'}"
 
@@ -95,6 +114,55 @@ def _set_session_id(
         data = load_json(path, {})
         if session_id:
             data[key] = session_id
+        else:
+            data.pop(key, None)
+        atomic_write_json(path, data)
+
+
+def _sanitize_session_options(raw: Dict[str, Any]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+
+    model = str(raw.get("codex_model", "")).strip()
+    if model:
+        out["codex_model"] = model
+
+    profile = str(raw.get("codex_profile", "")).strip()
+    if profile:
+        out["codex_profile"] = profile
+
+    effort = _normalize_effort(str(raw.get("codex_reasoning_effort", "")))
+    if effort:
+        out["codex_reasoning_effort"] = effort
+
+    return out
+
+
+def _get_session_options(
+    workspace: Path, channel_id: str, thread_ts: Optional[str]
+) -> Dict[str, str]:
+    path = _session_options_path(workspace)
+    key = _session_key(channel_id, thread_ts)
+    with file_lock(path):
+        data = load_json(path, {})
+        raw = data.get(key, {})
+        if not isinstance(raw, dict):
+            return {}
+        return _sanitize_session_options(raw)
+
+
+def _set_session_options(
+    workspace: Path,
+    channel_id: str,
+    thread_ts: Optional[str],
+    options: Optional[Dict[str, str]],
+) -> None:
+    path = _session_options_path(workspace)
+    key = _session_key(channel_id, thread_ts)
+    with file_lock(path):
+        data = load_json(path, {})
+        clean = _sanitize_session_options(options or {})
+        if clean:
+            data[key] = clean
         else:
             data.pop(key, None)
         atomic_write_json(path, data)
@@ -443,6 +511,153 @@ def _handle_command(text: str) -> Optional[str]:
     return None
 
 
+def _handle_runtime_command(text: str) -> Optional[Dict[str, Any]]:
+    parts = text.strip().split()
+    if not parts:
+        return None
+
+    head = parts[0].lower()
+
+    if head in ("model", "/model"):
+        if len(parts) == 1 or parts[1].lower() in ("show", "status"):
+            return {"action": "show"}
+        if parts[1].lower() == "reset":
+            return {"action": "reset"}
+
+        opts: Dict[str, str] = {"codex_model": parts[1]}
+        i = 2
+        while i < len(parts):
+            token = parts[i]
+            lower = token.lower()
+
+            if i + 1 < len(parts):
+                two_word_effort = _normalize_effort(f"{parts[i]} {parts[i + 1]}")
+                if two_word_effort:
+                    opts["codex_reasoning_effort"] = two_word_effort
+                    i += 2
+                    continue
+
+            one_effort = _normalize_effort(lower)
+            if one_effort:
+                opts["codex_reasoning_effort"] = one_effort
+                i += 1
+                continue
+
+            if lower.startswith("effort="):
+                effort = _normalize_effort(token.split("=", 1)[1].strip())
+                if effort:
+                    opts["codex_reasoning_effort"] = effort
+                i += 1
+                continue
+
+            if lower.startswith("profile="):
+                profile = token.split("=", 1)[1].strip()
+                if profile:
+                    opts["codex_profile"] = profile
+                i += 1
+                continue
+
+            # Backward-compatible shorthand: next unknown token can be profile name.
+            if "codex_profile" not in opts and token.strip():
+                opts["codex_profile"] = token.strip()
+            i += 1
+
+        return {"action": "set", "options": opts}
+
+    if head in ("effort", "reasoning", "/effort"):
+        effort = _normalize_effort(" ".join(parts[1:])) if len(parts) > 1 else None
+        if not effort:
+            return {"action": "invalid_effort"}
+        return {"action": "set", "options": {"codex_reasoning_effort": effort}}
+
+    if head in ("profile", "/profile"):
+        if len(parts) == 1:
+            return {"action": "show"}
+        if parts[1].lower() == "reset":
+            return {"action": "clear_profile"}
+        return {"action": "set", "options": {"codex_profile": parts[1].strip()}}
+
+    return None
+
+
+def _resolve_runtime_settings(
+    workspace: Path, channel_id: str, thread_root: Optional[str]
+) -> tuple[str, str, str]:
+    runtime_opts = _get_session_options(workspace, channel_id, thread_root)
+    model = runtime_opts.get("codex_model") or os.environ.get("AIDE_CODEX_MODEL", "(default)")
+    effort = runtime_opts.get("codex_reasoning_effort") or os.environ.get(
+        "AIDE_CODEX_REASONING_EFFORT", "(default)"
+    )
+    profile = runtime_opts.get("codex_profile") or os.environ.get("AIDE_CODEX_PROFILE", "(default)")
+    return model, effort, profile
+
+
+def _slash_thread_root(body: Dict[str, Any]) -> Optional[str]:
+    # Slash command in thread should contain thread_ts; otherwise it's channel root.
+    raw = body.get("thread_ts")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
+
+
+def _execute_runtime_command(
+    client: WebClient,
+    workspace: Path,
+    channel_id: str,
+    thread_root: Optional[str],
+    runtime_cmd: Dict[str, Any],
+    thread_ts: Optional[str] = None,
+) -> None:
+    action = runtime_cmd.get("action")
+    current = _get_session_options(workspace, channel_id, thread_root)
+
+    if action == "invalid_effort":
+        _post_message(client, channel_id, "Použij `effort minimal|low|medium|high|xhigh`.", thread_ts)
+        return
+
+    if action == "show":
+        model, effort, profile = _resolve_runtime_settings(workspace, channel_id, thread_root)
+        _post_message(
+            client,
+            channel_id,
+            (
+                f"*Codex runtime nastavení*\n"
+                f"*Model:* {model}\n"
+                f"*Effort:* {effort}\n"
+                f"*Profile:* {profile}\n"
+                f"`model <id> [minimal|low|medium|high|xhigh] [profile=<name>]`"
+            ),
+            thread_ts,
+        )
+        return
+
+    if action == "reset":
+        _set_session_options(workspace, channel_id, thread_root, None)
+        _post_message(client, channel_id, "Runtime override smazán, používá se `.env`.", thread_ts)
+        return
+
+    if action == "clear_profile":
+        current.pop("codex_profile", None)
+        _set_session_options(workspace, channel_id, thread_root, current)
+        _post_message(client, channel_id, "Runtime profile odstraněn.", thread_ts)
+        return
+
+    if action == "set":
+        opts = runtime_cmd.get("options", {})
+        if isinstance(opts, dict):
+            merged = dict(current)
+            merged.update(opts)
+            _set_session_options(workspace, channel_id, thread_root, merged)
+            model, effort, profile = _resolve_runtime_settings(workspace, channel_id, thread_root)
+            _post_message(
+                client,
+                channel_id,
+                f"Nastaveno: model `{model}`, effort `{effort}`, profile `{profile}`.",
+                thread_ts,
+            )
+        return
+
+
 def _post_message(
     client: WebClient,
     channel_id: str,
@@ -485,8 +700,10 @@ def _process_message(
 ) -> None:
     key = _session_key(channel_id, thread_root)
     cmd = _handle_command(text)
+    runtime_cmd = _handle_runtime_command(text)
     if cmd == "new":
         _set_session_id(workspace, channel_id, thread_root, None)
+        _set_session_options(workspace, channel_id, thread_root, None)
         RUNNING.pop(key, None)
         RUNNING_META.pop(key, None)
         _post_message(client, channel_id, "New session created.", thread_root)
@@ -538,7 +755,19 @@ def _process_message(
             f"*Context:* {total_context:,} / {context_window:,} ({usage_percent:.1f}%)\n"
             f"*Remaining:* ~{remaining:,} tokens"
         )
+        runtime_model, runtime_effort, runtime_profile = _resolve_runtime_settings(
+            workspace, channel_id, thread_root
+        )
+        msg += (
+            f"\n*Runtime model:* {runtime_model}"
+            f"\n*Runtime effort:* {runtime_effort}"
+            f"\n*Runtime profile:* {runtime_profile}"
+        )
         _post_message(client, channel_id, msg, thread_root)
+        return
+    if runtime_cmd:
+        _execute_runtime_command(client, workspace, channel_id, thread_root, runtime_cmd, thread_root)
+        _process_next_in_queue(client, workspace, channel_id, thread_root, key)
         return
 
     attachment_paths: list[str] = []
@@ -596,6 +825,7 @@ def _process_message(
         _add_reaction(client, channel_id, event_ts)
 
     session_id = _get_session_id(workspace, channel_id, thread_root)
+    session_options = _get_session_options(workspace, channel_id, thread_root)
 
     def _process_cb(proc):
         RUNNING[key] = proc
@@ -637,6 +867,7 @@ def _process_message(
             working_dir=workspace,
             process_cb=_process_cb,
             tool_cb=_tool_cb,
+            backend_options=session_options,
         )
     except Exception as exc:
         RUNNING.pop(key, None)
@@ -889,6 +1120,14 @@ def main() -> None:
             for k in to_remove:
                 data.pop(k, None)
             atomic_write_json(path, data)
+        # Clear all runtime options for this channel too
+        opts_path = _session_options_path(workspace)
+        with file_lock(opts_path):
+            opts = load_json(opts_path, {})
+            to_remove = [k for k in opts if k.startswith(f"{channel_id}:")]
+            for k in to_remove:
+                opts.pop(k, None)
+            atomic_write_json(opts_path, opts)
         _post_message(client, channel_id, "Session reset. Starting fresh.")
 
     @app.command("/stop")
@@ -964,6 +1203,59 @@ def main() -> None:
             )
 
         _post_message(client, channel_id, "\n\n".join(messages))
+
+    @app.command("/model")
+    def handle_model_command(ack, body, logger):
+        ack()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not _is_allowed(user_id, allowed):
+            return
+        thread_root = _slash_thread_root(body)
+        text = str(body.get("text", "")).strip()
+        raw = f"model {text}".strip()
+        runtime_cmd = _handle_runtime_command(raw)
+        if not runtime_cmd:
+            _post_message(
+                client,
+                channel_id,
+                "Použití: `/model`, `/model reset`, `/model gpt-5.3-codex xhigh`",
+                thread_root,
+            )
+            return
+        _execute_runtime_command(client, workspace, channel_id, thread_root, runtime_cmd, thread_root)
+
+    @app.command("/effort")
+    def handle_effort_command(ack, body, logger):
+        ack()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not _is_allowed(user_id, allowed):
+            return
+        thread_root = _slash_thread_root(body)
+        text = str(body.get("text", "")).strip()
+        raw = f"effort {text}".strip()
+        runtime_cmd = _handle_runtime_command(raw)
+        if not runtime_cmd:
+            _post_message(client, channel_id, "Použití: `/effort low` nebo `/effort extra high`", thread_root)
+            return
+        _execute_runtime_command(client, workspace, channel_id, thread_root, runtime_cmd, thread_root)
+
+    @app.command("/profile")
+    def handle_profile_command(ack, body, logger):
+        ack()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not _is_allowed(user_id, allowed):
+            return
+        thread_root = _slash_thread_root(body)
+        text = str(body.get("text", "")).strip()
+        raw = f"profile {text}".strip()
+        runtime_cmd = _handle_runtime_command(raw)
+        if not runtime_cmd:
+            _post_message(client, channel_id, "Použití: `/profile default` nebo `/profile reset`", thread_root)
+            return
+        _execute_runtime_command(client, workspace, channel_id, thread_root, runtime_cmd, thread_root)
 
     @app.command("/alive")
     def handle_alive_command(ack, body, logger):

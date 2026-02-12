@@ -27,6 +27,7 @@ Socket Mode = bot komunikuje přes WebSocket, nepotřebuješ veřejnou URL.
 | `im:history` | Bot čte historii DM |
 | `im:write` | Bot může psát DM |
 | `files:read` | Bot vidí nahrané soubory (přílohy) |
+| `commands` | Slash commandy (`/new`, `/session`, `/model`, ...) |
 
 ### Volitelné scopes pro auto-thread
 
@@ -62,6 +63,17 @@ Pokud chceš aby bot automaticky odpovídal ve vláknech bez @zmínky:
 1. Jdi zpět do **OAuth & Permissions**
 2. Klikni **Install to Workspace** a potvrď
 3. Zkopíruj **Bot User OAuth Token** (začíná na `xoxb-...`)
+
+## 5.1 Nastavení Slash Commands
+
+V levém menu otevři **Slash Commands** a přidej:
+
+- `/new`
+- `/stop`
+- `/session`
+- `/model`
+- `/effort`
+- `/profile`
 
 ## 6. Přidání bota do kanálu
 

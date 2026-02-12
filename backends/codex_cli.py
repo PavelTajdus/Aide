@@ -33,9 +33,11 @@ def build_cmd(
     prompt: str,
     session_id: Optional[str] = None,
     working_dir: Optional[Path] = None,
+    backend_options: Optional[Dict[str, Any]] = None,
 ) -> list[str]:
     """Build the ``codex exec`` command list."""
     base = ["npx", "codex"]
+    options = backend_options or {}
 
     # -C/--cd is accepted at top-level/exec level, not on exec resume.
     # Place it before subcommands so resume parsing does not fail.
@@ -55,19 +57,42 @@ def build_cmd(
         cmd.append("--full-auto")
 
     # Optional profile override (maps to ~/.codex/config.toml [profiles.<name>])
-    profile = os.environ.get("AIDE_CODEX_PROFILE", "").strip()
+    profile = str(
+        options.get("codex_profile")
+        or options.get("profile")
+        or os.environ.get("AIDE_CODEX_PROFILE", "")
+    ).strip()
     if profile:
         cmd.extend(["--profile", profile])
 
     # Model override
-    model = os.environ.get("AIDE_CODEX_MODEL")
+    model = str(
+        options.get("codex_model")
+        or options.get("model")
+        or os.environ.get("AIDE_CODEX_MODEL", "")
+    ).strip()
     if model:
         cmd.extend(["-m", model])
 
     # Optional reasoning effort override for reasoning-capable models
-    effort = os.environ.get("AIDE_CODEX_REASONING_EFFORT", "").strip().lower()
+    effort = str(
+        options.get("codex_reasoning_effort")
+        or options.get("reasoning_effort")
+        or os.environ.get("AIDE_CODEX_REASONING_EFFORT", "")
+    ).strip().lower()
+    effort_aliases = {
+        "extra high": "xhigh",
+        "extra-high": "xhigh",
+        "extra_high": "xhigh",
+        "extrahigh": "xhigh",
+        "ultra high": "xhigh",
+        "ultra-high": "xhigh",
+        "ultra_high": "xhigh",
+        "ultrahigh": "xhigh",
+    }
+    effort = effort_aliases.get(effort, effort)
     if effort:
-        allowed_efforts = {"minimal", "low", "medium", "high"}
+        allowed_efforts = {"minimal", "low", "medium", "high", "xhigh"}
         if effort in allowed_efforts:
             cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
         else:

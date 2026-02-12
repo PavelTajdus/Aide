@@ -16,7 +16,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from backends import get_backend
 from config import load_workspace_env, resolve_workspace
@@ -77,6 +77,7 @@ def run_agent(
     timeout_s: int = 300,
     process_cb: Optional[Callable[[subprocess.Popen], None]] = None,
     tool_cb: Optional[Callable[[str, Dict], None]] = None,
+    backend_options: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Optional[str], List[Event]]:
     if working_dir is None:
         working_dir = resolve_workspace()
@@ -86,7 +87,12 @@ def run_agent(
     backend = get_backend()
     backend.gen_context(working_dir)
 
-    cmd = backend.build_cmd(prompt, session_id, working_dir)
+    cmd = backend.build_cmd(
+        prompt,
+        session_id,
+        working_dir,
+        backend_options=backend_options,
+    )
 
     proc = subprocess.Popen(
         cmd,
