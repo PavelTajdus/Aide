@@ -78,13 +78,14 @@ def run_agent(
     process_cb: Optional[Callable[[subprocess.Popen], None]] = None,
     tool_cb: Optional[Callable[[str, Dict], None]] = None,
     backend_options: Optional[Dict[str, Any]] = None,
+    backend_name: Optional[str] = None,
 ) -> Tuple[str, Optional[str], List[Event]]:
     if working_dir is None:
         working_dir = resolve_workspace()
 
     load_workspace_env(working_dir)
 
-    backend = get_backend()
+    backend = get_backend(backend_name)
     backend.gen_context(working_dir)
 
     cmd = backend.build_cmd(
@@ -148,7 +149,8 @@ def run_agent(
         p_tools = parsed.get("tools") or []
 
         if os.environ.get("AIDE_DEBUG_EVENTS"):
-            print(f"[DEBUG] backend={os.environ.get('AIDE_BACKEND', 'claude-code')} "
+            debug_backend = backend_name or os.environ.get("AIDE_BACKEND", "claude-code")
+            print(f"[DEBUG] backend={debug_backend} "
                   f"type={p_type}, raw_keys={list(evt.keys())}")
 
         if p_sid:
@@ -202,12 +204,12 @@ def main() -> None:
                         help="Backend: claude-code, codex")
     args = parser.parse_args()
 
-    if args.backend:
-        os.environ["AIDE_BACKEND"] = args.backend
-
     working_dir = resolve_workspace(args.workspace)
     answer, sid, _tool_log = run_agent(
-        args.prompt, session_id=args.session_id, working_dir=working_dir
+        args.prompt,
+        session_id=args.session_id,
+        working_dir=working_dir,
+        backend_name=args.backend,
     )
     if sid:
         print(f"[session_id] {sid}")
