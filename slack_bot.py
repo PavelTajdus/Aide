@@ -222,26 +222,77 @@ def _is_allowed(user_id: Optional[str], allowed: list[str]) -> bool:
 
 # ── Multi-user routing ────────────────────────────────────────────────
 
+_DB_POOL = None
+_DB_POOL_LOCK = threading.Lock()
+
 
 def _db_conn():
-    """Get a Postgres connection if DATABASE_URL is set."""
+    """Get a Postgres connection from a thread-safe pool."""
+    global _DB_POOL
     url = os.environ.get("DATABASE_URL", "")
     if not url:
         return None
     try:
         import psycopg2
-        return psycopg2.connect(url)
+        import psycopg2.pool
+        with _DB_POOL_LOCK:
+            if _DB_POOL is None:
+                _DB_POOL = psycopg2.pool.ThreadedConnectionPool(1, 5, url)
+        return _DB_POOL.getconn()
     except Exception:
         return None
 
 
-_USER_CACHE: Dict[str, str] = {}  # slack_user_id → aide_user_id
+def _db_return(conn):
+    """Return a connection to the pool (call instead of conn.close())."""
+    if _DB_POOL and conn:
+        try:
+            _DB_POOL.putconn(conn)
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+class _TTLCache:
+    """Simple thread-safe TTL cache."""
+
+    def __init__(self, ttl_seconds: int = 300, max_size: int = 200):
+        self._data: Dict[str, tuple] = {}  # key → (value, timestamp)
+        self._ttl = ttl_seconds
+        self._max = max_size
+        self._lock = threading.Lock()
+
+    def get(self, key: str):
+        with self._lock:
+            entry = self._data.get(key)
+            if entry is None:
+                return None
+            val, ts = entry
+            if time.time() - ts > self._ttl:
+                del self._data[key]
+                return None
+            return val
+
+    def set(self, key: str, value):
+        with self._lock:
+            if len(self._data) >= self._max and key not in self._data:
+                # Evict oldest entry
+                oldest_key = min(self._data, key=lambda k: self._data[k][1])
+                del self._data[oldest_key]
+            self._data[key] = (value, time.time())
+
+
+_USER_CACHE = _TTLCache(ttl_seconds=600, max_size=100)  # 10 min TTL
+_SLACK_NAME_CACHE = _TTLCache(ttl_seconds=3600, max_size=100)  # 1 hour TTL
 
 
 def _resolve_user(slack_user_id: str, slack_name: str = "") -> Optional[str]:
     """Lookup or auto-create DB user from Slack user_id. Returns aide user UUID string or None."""
-    if slack_user_id in _USER_CACHE:
-        return _USER_CACHE[slack_user_id]
+    cached = _USER_CACHE.get(slack_user_id)
+    if cached is not None:
+        return cached
     conn = _db_conn()
     if not conn:
         return None
@@ -251,7 +302,7 @@ def _resolve_user(slack_user_id: str, slack_name: str = "") -> Optional[str]:
             row = cur.fetchone()
             if row:
                 uid = str(row[0])
-                _USER_CACHE[slack_user_id] = uid
+                _USER_CACHE.set(slack_user_id, uid)
                 return uid
             # Auto-create user on first contact
             import uuid
@@ -265,12 +316,12 @@ def _resolve_user(slack_user_id: str, slack_name: str = "") -> Optional[str]:
             row = cur.fetchone()
             conn.commit()
             uid = str(row[0]) if row else user_id
-            _USER_CACHE[slack_user_id] = uid
+            _USER_CACHE.set(slack_user_id, uid)
             return uid
     except Exception:
         return None
     finally:
-        conn.close()
+        _db_return(conn)
 
 
 def _resolve_channel_scope(channel_id: str, channel_type: str, aide_user_id: Optional[str]) -> Dict[str, Any]:
@@ -302,7 +353,7 @@ def _resolve_channel_scope(channel_id: str, channel_type: str, aide_user_id: Opt
     except Exception:
         pass
     finally:
-        conn.close()
+        _db_return(conn)
 
     # No claim → shared
     return {"scope": "shared", "owner_id": None, "via": "default"}
@@ -338,11 +389,27 @@ def _claim_channel(aide_user_id: str, channel_id: str, scope: str) -> Dict[str, 
     except Exception as exc:
         return {"success": False, "error": str(exc)}
     finally:
-        conn.close()
+        _db_return(conn)
+
+
+def _is_admin(aide_user_id: str) -> bool:
+    """Check if user has admin role."""
+    conn = _db_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT role FROM users WHERE id = %s", (aide_user_id,))
+            row = cur.fetchone()
+            return row is not None and row[0] == "admin"
+    except Exception:
+        return False
+    finally:
+        _db_return(conn)
 
 
 def _unclaim_channel(aide_user_id: str, channel_id: str) -> Dict[str, Any]:
-    """Remove a channel claim. Only the owner can unclaim."""
+    """Remove a channel claim. Owner or admin can unclaim."""
     conn = _db_conn()
     if not conn:
         return {"success": False, "error": "DB not available"}
@@ -352,29 +419,28 @@ def _unclaim_channel(aide_user_id: str, channel_id: str) -> Dict[str, Any]:
             row = cur.fetchone()
             if not row:
                 return {"success": False, "error": "No claim exists for this channel"}
-            if str(row[0]) != aide_user_id:
-                return {"success": False, "error": "You don't own this claim"}
+            is_owner = str(row[0]) == aide_user_id
+            if not is_owner and not _is_admin(aide_user_id):
+                return {"success": False, "error": "You don't own this claim (admin can override)"}
             cur.execute("DELETE FROM channel_claims WHERE channel_id = %s", (channel_id,))
         conn.commit()
         return {"success": True}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
     finally:
-        conn.close()
-
-
-_SLACK_NAME_CACHE: Dict[str, str] = {}
+        _db_return(conn)
 
 
 def _get_slack_user_name(client: WebClient, slack_user_id: str) -> str:
-    """Fetch Slack display name for a user (cached in memory)."""
-    if slack_user_id in _SLACK_NAME_CACHE:
-        return _SLACK_NAME_CACHE[slack_user_id]
+    """Fetch Slack display name for a user (cached with TTL)."""
+    cached = _SLACK_NAME_CACHE.get(slack_user_id)
+    if cached is not None:
+        return cached
     try:
         resp = client.users_info(user=slack_user_id)
         user = resp.get("user", {})
         name = user.get("real_name") or user.get("name") or slack_user_id
-        _SLACK_NAME_CACHE[slack_user_id] = name
+        _SLACK_NAME_CACHE.set(slack_user_id, name)
         return name
     except Exception:
         return slack_user_id
