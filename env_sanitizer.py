@@ -80,14 +80,15 @@ _ALWAYS_KEEP: Set[str] = {
     "AIDE_SLACK_DEFAULT_CHANNEL_ID",
     "AIDE_SLACK_DEFAULT_USER_ID",
     "AIDE_SLACK_DEFAULT_TARGET_TYPE",
+    "AIDE_SLACK_CHANNEL_ID",
+    "AIDE_SLACK_THREAD_TS",
     "AIDE_DEFAULT_CHAT_ID",
     # Git
     "GIT_AUTHOR_NAME",
     "GIT_AUTHOR_EMAIL",
     "GIT_COMMITTER_NAME",
     "GIT_COMMITTER_EMAIL",
-    # Claude Code needs these to function
-    "ANTHROPIC_API_KEY",
+    # Claude Code reads ANTHROPIC_API_KEY from user .env (not engine)
     "CLAUDE_CODE_USE_BEDROCK",
     "CLAUDE_CODE_USE_VERTEX",
     "ANTHROPIC_MODEL",
