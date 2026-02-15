@@ -13,6 +13,11 @@
 Only `open` tasks appear in overdue/upcoming heartbeat notifications.
 When a task depends on someone else's action, set status to `waiting` and explain in `--context`.
 
+## Multi-user features
+- `--assignee "Name"` or `--assignee UUID` — assign task to another user
+- `--shared` — create as team task (visible to all, user_id=NULL)
+- Tasks assigned to you (assignee_id = your user) are visible in your list
+
 ## Steps
 1. Gather required info: title, project (optional), due/remind/recurrence.
 2. Use core tool `task_manage.py` (add/list/update/complete):

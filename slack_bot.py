@@ -217,7 +217,24 @@ def _is_allowed(user_id: Optional[str], allowed: list[str]) -> bool:
         return False
     if not allowed:
         return False
-    return user_id in allowed
+    if user_id in allowed:
+        return True
+    # Fallback: check DB for active users (supports /invite without .env edit)
+    conn = _db_conn()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM users WHERE slack_id = %s AND active = true", (user_id,))
+            if cur.fetchone():
+                # Cache in memory so we don't hit DB every message
+                allowed.append(user_id)
+                return True
+    except Exception:
+        pass
+    finally:
+        _db_return(conn)
+    return False
 
 
 # ── Multi-user routing ────────────────────────────────────────────────
@@ -1785,6 +1802,202 @@ def main() -> None:
             total_queued = sum(len(q) for q in THREAD_QUEUES.values())
         if total_queued:
             lines.append(f"*Queued:* {total_queued} message(s)")
+
+        _post_message(client, channel_id, "\n".join(lines))
+
+    # ── Admin commands ──────────────────────────────────────────────────
+
+    @app.command("/invite")
+    def handle_invite_command(ack, body, logger):
+        """Invite a Slack user to Aide. Admin only. Usage: /invite @user"""
+        ack()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not _is_allowed(user_id, allowed):
+            return
+
+        slack_name = _get_slack_user_name(client, user_id) if user_id else ""
+        aide_user_id = _resolve_user(user_id, slack_name) if user_id else None
+        if not aide_user_id or not _is_admin(aide_user_id):
+            _post_message(client, channel_id, "Permission denied: admin only.")
+            return
+
+        text = str(body.get("text", "")).strip()
+        if not text:
+            _post_message(client, channel_id, "Usage: `/invite @user` or `/invite U12345 Jméno`")
+            return
+
+        # Parse: either @mention (Slack transforms to <@U12345>) or "U12345 Name"
+        import re as _re
+        mention_match = _re.match(r"<@(U\w+)(?:\|[^>]*)?>(?:\s+(.+))?", text)
+        if mention_match:
+            target_slack_id = mention_match.group(1)
+            target_name = mention_match.group(2) or _get_slack_user_name(client, target_slack_id) or target_slack_id
+        else:
+            parts = text.split(None, 1)
+            target_slack_id = parts[0]
+            target_name = parts[1] if len(parts) > 1 else _get_slack_user_name(client, target_slack_id) or target_slack_id
+
+        # Check if already exists
+        conn = _db_conn()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id, active FROM users WHERE slack_id = %s", (target_slack_id,))
+                    existing = cur.fetchone()
+                    if existing:
+                        if existing[1]:
+                            _post_message(client, channel_id, f"User <@{target_slack_id}> already registered.")
+                        else:
+                            cur.execute(
+                                "UPDATE users SET active = true, name = %s WHERE id = %s",
+                                (target_name, existing[0]),
+                            )
+                            conn.commit()
+                            _post_message(client, channel_id, f"User <@{target_slack_id}> re-activated.")
+                        return
+
+                    import uuid as _uuid
+                    new_id = str(_uuid.uuid4())
+                    cur.execute(
+                        "INSERT INTO users (id, slack_id, name, role) VALUES (%s, %s, %s, 'user')",
+                        (new_id, target_slack_id, target_name),
+                    )
+                conn.commit()
+                # Add to allowed list so they can use the bot immediately
+                if target_slack_id not in allowed:
+                    allowed.append(target_slack_id)
+                _post_message(client, channel_id, f"User <@{target_slack_id}> ({target_name}) invited. They can now DM the bot.")
+            except Exception as exc:
+                _post_message(client, channel_id, f"Error: {exc}")
+            finally:
+                _db_return(conn)
+        else:
+            _post_message(client, channel_id, "DB not available.")
+
+    @app.command("/users")
+    def handle_users_command(ack, body, logger):
+        """List all Aide users. Admin only."""
+        ack()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not _is_allowed(user_id, allowed):
+            return
+
+        slack_name = _get_slack_user_name(client, user_id) if user_id else ""
+        aide_user_id = _resolve_user(user_id, slack_name) if user_id else None
+        if not aide_user_id or not _is_admin(aide_user_id):
+            _post_message(client, channel_id, "Permission denied: admin only.")
+            return
+
+        conn = _db_conn()
+        if not conn:
+            _post_message(client, channel_id, "DB not available.")
+            return
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT slack_id, name, role, active, created_at FROM users ORDER BY created_at"
+                )
+                rows = cur.fetchall()
+        except Exception as exc:
+            _post_message(client, channel_id, f"Error: {exc}")
+            return
+        finally:
+            _db_return(conn)
+
+        if not rows:
+            _post_message(client, channel_id, "No users found.")
+            return
+
+        lines = ["*Aide users:*"]
+        for slack_id, name, role, active, created_at in rows:
+            status = "active" if active else "inactive"
+            role_tag = f" ({role})" if role != "user" else ""
+            lines.append(f"  <@{slack_id}> — {name}{role_tag} [{status}]")
+        _post_message(client, channel_id, "\n".join(lines))
+
+    @app.command("/admin")
+    def handle_admin_command(ack, body, logger):
+        """Admin overview. Usage: /admin [overview|users|claims]"""
+        ack()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not _is_allowed(user_id, allowed):
+            return
+
+        slack_name = _get_slack_user_name(client, user_id) if user_id else ""
+        aide_user_id = _resolve_user(user_id, slack_name) if user_id else None
+        if not aide_user_id or not _is_admin(aide_user_id):
+            _post_message(client, channel_id, "Permission denied: admin only.")
+            return
+
+        conn = _db_conn()
+        if not conn:
+            _post_message(client, channel_id, "DB not available.")
+            return
+
+        try:
+            with conn.cursor() as cur:
+                # User counts
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE active = true) AS active,
+                        COUNT(*) FILTER (WHERE active = false) AS inactive
+                    FROM users
+                """)
+                uc = cur.fetchone()
+
+                # Per-user stats
+                cur.execute("""
+                    SELECT u.name, u.role,
+                        COALESCE(m.cnt, 0) AS memories,
+                        COALESCE(t.cnt, 0) AS tasks
+                    FROM users u
+                    LEFT JOIN (SELECT user_id, COUNT(*) AS cnt FROM memories GROUP BY user_id) m ON m.user_id = u.id
+                    LEFT JOIN (SELECT user_id, COUNT(*) AS cnt FROM tasks WHERE status != 'completed' GROUP BY user_id) t ON t.user_id = u.id
+                    WHERE u.active = true
+                    ORDER BY u.name
+                """)
+                per_user = cur.fetchall()
+
+                # Shared
+                cur.execute("SELECT COUNT(*) FROM memories WHERE user_id IS NULL")
+                shared_mem = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM tasks WHERE user_id IS NULL AND status != 'completed'")
+                shared_tasks = cur.fetchone()[0]
+
+                # Claims
+                cur.execute("""
+                    SELECT cc.channel_id, cc.scope, u.name
+                    FROM channel_claims cc
+                    JOIN users u ON u.id = cc.owner_id
+                    ORDER BY u.name
+                """)
+                claims = cur.fetchall()
+        except Exception as exc:
+            _post_message(client, channel_id, f"Error: {exc}")
+            return
+        finally:
+            _db_return(conn)
+
+        lines = [f"*Admin overview*"]
+        lines.append(f"*Users:* {uc[0]} active, {uc[1]} inactive")
+        lines.append("")
+
+        if per_user:
+            lines.append("*Per user:*")
+            for name, role, memories, tasks in per_user:
+                role_tag = f" ({role})" if role != "user" else ""
+                lines.append(f"  {name}{role_tag} — {memories} memories, {tasks} open tasks")
+
+        lines.append(f"\n*Shared:* {shared_mem} memories, {shared_tasks} open tasks")
+
+        if claims:
+            lines.append("\n*Channel claims:*")
+            for ch_id, scope, owner in claims:
+                lines.append(f"  <#{ch_id}> — {scope} (owner: {owner})")
 
         _post_message(client, channel_id, "\n".join(lines))
 

@@ -156,7 +156,8 @@ def _user_filter(user_id: Optional[str]) -> tuple:
 
 
 def add_mem(workspace: Path, text: str, mem_type: Optional[str] = None,
-            tags: Optional[List[str]] = None, project: Optional[str] = None) -> None:
+            tags: Optional[List[str]] = None, project: Optional[str] = None,
+            shared: bool = False) -> None:
     if not text or not text.strip():
         print(json.dumps({"success": False, "error": "Text cannot be empty"}, ensure_ascii=False))
         sys.exit(1)
@@ -168,7 +169,7 @@ def add_mem(workspace: Path, text: str, mem_type: Optional[str] = None,
     detected_tags = _auto_tags(text) if tags is None else tags
     detected_entities = _extract_entities(text)
     detected_project = project or _detect_project(text)
-    user_id = _get_user_id()
+    user_id = None if shared else _get_user_id()
 
     conn = _get_conn()
     try:
@@ -302,14 +303,20 @@ def list_mem(workspace: Path, compact: bool = False, mem_type: Optional[str] = N
 
 def forget_mem(workspace: Path, mem_id: str) -> None:
     user_id = _get_user_id()
-    user_sql, user_params = _user_filter(user_id)
+    # Strict ownership: only delete own memories (not shared ones unless no user_id set)
+    if user_id:
+        own_sql = "user_id = %s"
+        own_params = [user_id]
+    else:
+        own_sql = "TRUE"
+        own_params = []
 
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"DELETE FROM memories WHERE id = %s AND {user_sql}",
-                (mem_id,) + tuple(user_params),
+                f"DELETE FROM memories WHERE id = %s AND {own_sql}",
+                (mem_id,) + tuple(own_params),
             )
             if cur.rowcount == 0:
                 print(json.dumps({"success": False, "error": "Memory item not found"}, ensure_ascii=False))
@@ -372,6 +379,7 @@ def main() -> None:
     add_p.add_argument("--type", dest="mem_type", help="Override auto-detected type")
     add_p.add_argument("--tags", help="Comma-separated tags")
     add_p.add_argument("--project", help="Override auto-detected project")
+    add_p.add_argument("--shared", action="store_true", help="Save as shared/team memory (user_id=NULL)")
 
     search_p = sub.add_parser("search")
     search_p.add_argument("--query", required=True)
@@ -396,7 +404,8 @@ def main() -> None:
             list_mem(workspace, compact=args.compact, mem_type=args.mem_type, project=args.project)
         elif args.cmd == "add":
             tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
-            add_mem(workspace, args.text, mem_type=args.mem_type, tags=tags, project=args.project)
+            add_mem(workspace, args.text, mem_type=args.mem_type, tags=tags,
+                    project=args.project, shared=args.shared)
         elif args.cmd == "search":
             search_mem(workspace, args.query, compact=args.compact,
                        mem_type=args.mem_type, project=args.project, limit=args.limit)

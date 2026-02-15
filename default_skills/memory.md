@@ -32,6 +32,7 @@ Optional flags:
 - `--type decision|contact|project|event|preference` — override auto-detected type
 - `--tags "finance,seo"` — override auto-detected tags
 - `--project "acg-stores"` — override auto-detected project
+- `--shared` — save as shared/team memory (user_id=NULL, visible to all users)
 
 ### Search (two-layer retrieval)
 Step 1 — compact index (~50 tokens/result):

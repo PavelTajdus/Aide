@@ -144,26 +144,57 @@ def list_tasks(workspace: Path, status: Optional[str]) -> None:
     print(json.dumps({"success": True, "data": tasks}, ensure_ascii=False))
 
 
+def _resolve_assignee(assignee_raw: Optional[str]) -> Optional[str]:
+    """Resolve assignee to user UUID. Accepts UUID or user name (case-insensitive)."""
+    if not assignee_raw:
+        return None
+    # If it looks like a UUID, return directly
+    try:
+        uuid.UUID(assignee_raw)
+        return assignee_raw
+    except ValueError:
+        pass
+    # Try to find by name
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM users WHERE LOWER(name) = LOWER(%s) AND active = true",
+                (assignee_raw,),
+            )
+            row = cur.fetchone()
+            if row:
+                return str(row[0])
+    finally:
+        conn.close()
+    return None
+
+
 def add_task(workspace: Path, args) -> None:
     import psycopg2.extras
 
     task_id = str(uuid.uuid4())
-    user_id = _get_user_id()
+    user_id = None if getattr(args, "shared", False) else _get_user_id()
+    raw_assignee = getattr(args, "assignee", None)
+    assignee_id = _resolve_assignee(raw_assignee)
+    if raw_assignee and assignee_id is None:
+        print(json.dumps({"success": False, "error": f"Assignee '{raw_assignee}' not found"}, ensure_ascii=False))
+        sys.exit(1)
 
     conn = _get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                """INSERT INTO tasks (id, user_id, title, project, status, priority, context, due_date, remind_at, recurrence)
-                   VALUES (%s, %s, %s, %s, 'open', %s, %s, %s, %s, %s)""",
-                (task_id, user_id, args.title, args.project, args.priority,
+                """INSERT INTO tasks (id, user_id, assignee_id, title, project, status, priority, context, due_date, remind_at, recurrence)
+                   VALUES (%s, %s, %s, %s, %s, 'open', %s, %s, %s, %s, %s)""",
+                (task_id, user_id, assignee_id, args.title, args.project, args.priority,
                  args.context, args.due or None, args.remind or None, args.recurrence or None),
             )
         conn.commit()
     finally:
         conn.close()
 
-    print(json.dumps({"success": True, "data": {"id": task_id}}, ensure_ascii=False))
+    print(json.dumps({"success": True, "data": {"id": task_id, "assignee_id": assignee_id}}, ensure_ascii=False))
 
 
 def update_task(workspace: Path, args) -> None:
@@ -175,6 +206,7 @@ def update_task(workspace: Path, args) -> None:
             # Build SET clause dynamically
             fields = []
             values = []
+            assignee_id = _resolve_assignee(getattr(args, "assignee", None))
             field_map = {
                 "title": args.title,
                 "project": args.project,
@@ -184,6 +216,7 @@ def update_task(workspace: Path, args) -> None:
                 "due_date": args.due or None,
                 "remind_at": args.remind or None,
                 "recurrence": args.recurrence,
+                "assignee_id": assignee_id,
             }
             for col, val in field_map.items():
                 if val is not None:
@@ -256,9 +289,10 @@ def complete_task(workspace: Path, task_id: str) -> None:
 
                 new_id = str(uuid.uuid4())
                 cur.execute(
-                    """INSERT INTO tasks (id, user_id, title, project, status, priority, context, due_date, remind_at, recurrence)
-                       VALUES (%s, %s, %s, %s, 'open', %s, %s, %s, %s, %s)""",
+                    """INSERT INTO tasks (id, user_id, assignee_id, title, project, status, priority, context, due_date, remind_at, recurrence)
+                       VALUES (%s, %s, %s, %s, %s, 'open', %s, %s, %s, %s, %s)""",
                     (new_id, str(task["user_id"]) if task.get("user_id") else None,
+                     str(task["assignee_id"]) if task.get("assignee_id") else None,
                      task["title"], task["project"], task["priority"],
                      task["context"], new_due, new_remind, rec),
                 )
@@ -288,6 +322,8 @@ def main() -> None:
     add_p.add_argument("--due", default=None)
     add_p.add_argument("--remind", default=None)
     add_p.add_argument("--recurrence", default=None)
+    add_p.add_argument("--assignee", default=None, help="Assign to user (UUID or name)")
+    add_p.add_argument("--shared", action="store_true", help="Create as team task (user_id=NULL)")
 
     up_p = sub.add_parser("update")
     up_p.add_argument("--id", required=True)
@@ -299,6 +335,7 @@ def main() -> None:
     up_p.add_argument("--due")
     up_p.add_argument("--remind")
     up_p.add_argument("--recurrence")
+    up_p.add_argument("--assignee", default=None, help="Assign to user (UUID or name)")
 
     comp_p = sub.add_parser("complete")
     comp_p.add_argument("--id", required=True)
