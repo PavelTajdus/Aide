@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from backends import get_backend
 from config import load_workspace_env, resolve_workspace
+from env_sanitizer import sanitize_env
 
 Event = Dict[str, object]
 ToolInfo = Dict[str, object]
@@ -58,7 +59,7 @@ def get_session_usage(
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            env=os.environ.copy(),
+            env=sanitize_env(),
         )
         if result.returncode != 0:
             return None
@@ -102,7 +103,7 @@ def run_agent(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
-        env=os.environ.copy(),
+        env=sanitize_env(),
     )
 
     if process_cb:

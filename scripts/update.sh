@@ -64,13 +64,28 @@ done
 mkdir -p "$WORKSPACE/data"
 echo "$ENGINE_VERSION" > "$WORKSPACE_VERSION_FILE"
 
-# Update Claude Code if installed
-if command -v claude &>/dev/null || [[ -x "$HOME/.local/bin/claude" ]]; then
+update_cli_if_installed() {
+  local title="$1"
+  local binary_name="$2"
+  local fallback_path="$3"
+  local update_args="$4"
+  local bin_path=""
+
+  if command -v "$binary_name" &>/dev/null; then
+    bin_path="$binary_name"
+  elif [[ -x "$fallback_path" ]]; then
+    bin_path="$fallback_path"
+  else
+    return 0
+  fi
+
   echo ""
-  echo "--- Claude Code update ---"
-  CLAUDE_BIN="${HOME}/.local/bin/claude"
-  command -v claude &>/dev/null && CLAUDE_BIN="claude"
-  "$CLAUDE_BIN" update 2>&1 || echo "Claude Code update skipped (failed or already up to date)"
-fi
+  echo "--- $title update ---"
+  # shellcheck disable=SC2086
+  "$bin_path" $update_args 2>&1 || echo "$title update skipped (failed or already up to date)"
+}
+
+update_cli_if_installed "Claude Code" "claude" "$HOME/.local/bin/claude" "update"
+update_cli_if_installed "Codex" "codex" "$HOME/.local/bin/codex" "update"
 
 echo "Update completed."

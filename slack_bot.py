@@ -105,12 +105,39 @@ def _session_key(channel_id: str, thread_ts: Optional[str]) -> str:
     return f"{channel_id}:{thread_ts or 'root'}"
 
 
+def _current_backend_name() -> str:
+    return os.environ.get("AIDE_BACKEND", "claude-code").strip().lower()
+
+
 def _get_session_id(workspace: Path, channel_id: str, thread_ts: Optional[str]) -> Optional[str]:
+    """Return session ID only if it belongs to the currently active backend.
+
+    Session entries can be a plain string (legacy) or a dict
+    ``{"session_id": "...", "backend": "..."}``.  When the stored backend
+    differs from the active one the entry is silently dropped so that a
+    fresh session is created with the correct backend.
+    """
     path = _sessions_path(workspace)
     key = _session_key(channel_id, thread_ts)
+    current_backend = _current_backend_name()
     with file_lock(path):
         data = load_json(path, {})
-        return data.get(key)
+        entry = data.get(key)
+        if entry is None:
+            return None
+        # Legacy format: plain string
+        if isinstance(entry, str):
+            return entry
+        # New format: dict with backend affinity
+        if isinstance(entry, dict):
+            stored_backend = entry.get("backend", "")
+            if stored_backend and stored_backend != current_backend:
+                # Backend mismatch – discard stale session
+                data.pop(key, None)
+                atomic_write_json(path, data)
+                return None
+            return entry.get("session_id")
+        return None
 
 
 def _set_session_id(
@@ -118,10 +145,11 @@ def _set_session_id(
 ) -> None:
     path = _sessions_path(workspace)
     key = _session_key(channel_id, thread_ts)
+    current_backend = _current_backend_name()
     with file_lock(path):
         data = load_json(path, {})
         if session_id:
-            data[key] = session_id
+            data[key] = {"session_id": session_id, "backend": current_backend}
         else:
             data.pop(key, None)
         atomic_write_json(path, data)
