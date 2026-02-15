@@ -175,9 +175,70 @@ def _generate_skills(workspace: Path, auto_dir: Path) -> str:
     return "\n".join(summary_lines)
 
 
+def _db_conn(workspace: Path):
+    """Get a Postgres connection using DATABASE_URL from workspace .env or os.environ."""
+    try:
+        import psycopg2
+    except ImportError:
+        return None
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        ws_env = read_workspace_env(workspace)
+        url = ws_env.get("DATABASE_URL", "")
+    if not url:
+        return None
+    try:
+        return psycopg2.connect(url)
+    except Exception:
+        return None
+
+
+def _db_query_tasks(workspace: Path) -> Optional[List[Dict]]:
+    """Query open tasks from Postgres. Returns None if DB unavailable."""
+    conn = _db_conn(workspace)
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT title, status, priority, due_date FROM tasks "
+                "WHERE status NOT IN ('done', 'completed') "
+                "ORDER BY created_at DESC LIMIT 20"
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def _db_query_cron(workspace: Path) -> Optional[List[Dict]]:
+    """Query active cron jobs from Postgres. Returns None if DB unavailable."""
+    conn = _db_conn(workspace)
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, schedule, task FROM cron_jobs "
+                "WHERE enabled = true ORDER BY id LIMIT 10"
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 def _generate_tasks(workspace: Path, auto_dir: Path) -> None:
-    items = _load_json(workspace / "data" / "tasks.json", [])
-    open_tasks = [t for t in items if t.get("status", "open") != "done"]
+    open_tasks = _db_query_tasks(workspace)
+    if open_tasks is None:
+        # Fallback to JSON
+        items = _load_json(workspace / "data" / "tasks.json", [])
+        open_tasks = [t for t in items if t.get("status", "open") != "done"]
+
     if not open_tasks:
         _write_auto(auto_dir / "tasks.md", "# Open tasks\n\n(none)\n")
         return
@@ -186,7 +247,7 @@ def _generate_tasks(workspace: Path, auto_dir: Path) -> None:
     for t in open_tasks[:20]:
         prio = t.get("priority", "")
         title = t.get("title", "(untitled)")
-        due = t.get("due", "")
+        due = t.get("due", "") or t.get("due_date", "")
         parts = [f"- [{prio}] {title}" if prio else f"- {title}"]
         if due:
             parts.append(f"(due: {due})")
@@ -196,8 +257,12 @@ def _generate_tasks(workspace: Path, auto_dir: Path) -> None:
 
 
 def _generate_cron(workspace: Path, auto_dir: Path) -> None:
-    items = _load_json(workspace / "data" / "cron.json", [])
-    active = [j for j in items if j.get("enabled", True)]
+    active = _db_query_cron(workspace)
+    if active is None:
+        # Fallback to JSON
+        items = _load_json(workspace / "data" / "cron.json", [])
+        active = [j for j in items if j.get("enabled", True)]
+
     if not active:
         _write_auto(auto_dir / "cron.md", "# Cron jobs\n\n(none)\n")
         return
@@ -206,7 +271,7 @@ def _generate_cron(workspace: Path, auto_dir: Path) -> None:
     for j in active[:10]:
         jid = j.get("id", "?")
         sched = j.get("schedule", "?")
-        prompt = j.get("prompt", "")[:60]
+        prompt = (j.get("prompt", "") or j.get("task", "") or "")[:60]
         lines.append(f"- `{jid}` — `{sched}` — {prompt}")
 
     _write_auto(auto_dir / "cron.md", "\n".join(lines) + "\n")

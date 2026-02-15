@@ -15,6 +15,20 @@ from core_tools._utils import atomic_write_json, file_lock, load_json, parse_dt
 from core_tools.send_message import send_message
 
 
+def _db_conn():
+    """Get a Postgres connection if DATABASE_URL is set."""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        return None
+    try:
+        import psycopg2
+        conn = psycopg2.connect(url)
+        conn.autocommit = False
+        return conn
+    except Exception:
+        return None
+
+
 POLL_INTERVAL_S = 60
 GRACE_WINDOW_S = 61
 
@@ -112,6 +126,31 @@ def _task_id(task: Dict[str, Any]) -> str:
     return task.get("id", task.get("title", ""))
 
 
+def _load_heartbeat_tasks_db() -> Optional[List[Dict[str, Any]]]:
+    """Load open tasks with due dates from Postgres."""
+    conn = _db_conn()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, status, priority, project, due_date, remind_at "
+                "FROM tasks WHERE status = 'open' AND due_date IS NOT NULL"
+            )
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+            # Convert due_date to 'due' string for compat
+            for r in rows:
+                dd = r.get("due_date")
+                if dd:
+                    r["due"] = dd.isoformat() if hasattr(dd, "isoformat") else str(dd)
+            return rows
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 def _execute_heartbeat_job(workspace: Path) -> None:
     now_hour = datetime.now().hour
     start_hour, end_hour = _heartbeat_hours()
@@ -119,7 +158,6 @@ def _execute_heartbeat_job(workspace: Path) -> None:
         _log_line(workspace, f"Heartbeat: outside working hours ({start_hour}-{end_hour}), skipping")
         return
 
-    tasks_path = workspace / "data" / "tasks.json"
     heartbeat_path = workspace / "data" / "last_heartbeat.json"
     overdue: List[Dict[str, Any]] = []
     upcoming: List[Dict[str, Any]] = []
@@ -127,18 +165,25 @@ def _execute_heartbeat_job(workspace: Path) -> None:
     soon_hours = _heartbeat_soon_hours()
     soon_cutoff = now + timedelta(hours=soon_hours)
 
-    with file_lock(tasks_path):
-        tasks: List[Dict[str, Any]] = load_json(tasks_path, [])
-        for task in tasks:
-            if task.get("status") != "open":
-                continue
-            due_dt = parse_dt(task.get("due"))
-            if not due_dt:
-                continue
-            if due_dt <= now:
-                overdue.append({"due": due_dt, "task": task})
-            elif due_dt <= soon_cutoff:
-                upcoming.append({"due": due_dt, "task": task})
+    # Try Postgres first, fallback to JSON
+    db_tasks = _load_heartbeat_tasks_db()
+    if db_tasks is not None:
+        tasks = db_tasks
+    else:
+        tasks_path = workspace / "data" / "tasks.json"
+        with file_lock(tasks_path):
+            tasks = load_json(tasks_path, [])
+
+    for task in tasks:
+        if task.get("status") != "open":
+            continue
+        due_dt = parse_dt(task.get("due"))
+        if not due_dt:
+            continue
+        if due_dt <= now:
+            overdue.append({"due": due_dt, "task": task})
+        elif due_dt <= soon_cutoff:
+            upcoming.append({"due": due_dt, "task": task})
 
     if not overdue and not upcoming:
         _log_line(workspace, "Heartbeat: nothing to report")
@@ -197,7 +242,71 @@ def _execute_cron_job(workspace: Path, job_id: Optional[str], prompt: str) -> No
         _log_line(workspace, f"Cron job failed ({job_id}): {exc}")
 
 
+def _run_cron_jobs_db(workspace: Path, now: datetime, executor: ThreadPoolExecutor) -> bool:
+    """Run cron jobs from Postgres. Returns True if DB was used, False to fallback."""
+    conn = _db_conn()
+    if not conn:
+        return False
+    try:
+        due_jobs: List[Dict[str, Any]] = []
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, schedule, task, last_run FROM cron_jobs WHERE enabled = true"
+            )
+            cols = [d[0] for d in cur.description]
+            jobs = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+        for job in jobs:
+            schedule = job.get("schedule")
+            prompt = job.get("task")
+            if not schedule or not prompt:
+                continue
+
+            try:
+                last_run_raw = job.get("last_run")
+                if isinstance(last_run_raw, datetime):
+                    last_run = last_run_raw.replace(tzinfo=None)
+                else:
+                    last_run = parse_dt(str(last_run_raw) if last_run_raw else None)
+                if not _should_run(schedule, last_run, now):
+                    continue
+            except Exception as exc:
+                _log_line(workspace, f"Invalid cron schedule ({job.get('id')}): {schedule} ({exc})")
+                continue
+
+            due_jobs.append({"id": job.get("id"), "prompt": prompt})
+
+        # Update last_run for due jobs
+        if due_jobs:
+            with conn.cursor() as cur:
+                for job in due_jobs:
+                    cur.execute(
+                        "UPDATE cron_jobs SET last_run = %s WHERE id = %s",
+                        (now, job["id"]),
+                    )
+            conn.commit()
+
+        for job in due_jobs:
+            _log_line(workspace, f"Scheduling cron job {job.get('id')}")
+            executor.submit(_execute_cron_job, workspace, job.get("id"), job["prompt"])
+
+        return True
+    except Exception as exc:
+        _log_line(workspace, f"DB cron query failed, falling back to JSON: {exc}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        conn.close()
+
+
 def _run_cron_jobs(workspace: Path, now: datetime, executor: ThreadPoolExecutor) -> None:
+    if _run_cron_jobs_db(workspace, now, executor):
+        return
+
+    # Fallback to JSON
     cron_path = workspace / "data" / "cron.json"
     due_jobs: List[Dict[str, Any]] = []
     with file_lock(cron_path):
@@ -232,7 +341,67 @@ def _run_cron_jobs(workspace: Path, now: datetime, executor: ThreadPoolExecutor)
         executor.submit(_execute_cron_job, workspace, job.get("id"), job["prompt"])
 
 
+def _run_task_reminders_db(workspace: Path, now: datetime) -> bool:
+    """Check and send task reminders from Postgres. Returns True if DB was used."""
+    conn = _db_conn()
+    if not conn:
+        return False
+    try:
+        due: List[Dict[str, Any]] = []
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, project, remind_at, remind_sent_at "
+                "FROM tasks WHERE status = 'open' AND remind_at IS NOT NULL "
+                "AND remind_at <= %s AND (remind_sent_at IS NULL OR remind_sent_at < remind_at)",
+                (now,),
+            )
+            cols = [d[0] for d in cur.description]
+            for row in cur.fetchall():
+                task = dict(zip(cols, row))
+                title = task.get("title", "(untitled)")
+                project = task.get("project")
+                message = f"Reminder: {title}"
+                if project:
+                    message += f" (project: {project})"
+                due.append({"id": str(task["id"]), "message": message})
+
+        if not due:
+            return True
+
+        sent_ids: List[str] = []
+        for item in due:
+            try:
+                send_message(item["message"])
+                sent_ids.append(item["id"])
+            except Exception as exc:
+                _log_line(workspace, f"Reminder failed: {exc}")
+
+        if sent_ids:
+            with conn.cursor() as cur:
+                for sid in sent_ids:
+                    cur.execute(
+                        "UPDATE tasks SET remind_sent_at = %s WHERE id = %s",
+                        (now, sid),
+                    )
+            conn.commit()
+
+        return True
+    except Exception as exc:
+        _log_line(workspace, f"DB reminder query failed, falling back to JSON: {exc}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        conn.close()
+
+
 def _run_task_reminders(workspace: Path, now: datetime) -> None:
+    if _run_task_reminders_db(workspace, now):
+        return
+
+    # Fallback to JSON
     tasks_path = workspace / "data" / "tasks.json"
     due: List[Dict[str, Any]] = []
     with file_lock(tasks_path):

@@ -83,6 +83,8 @@ _ALWAYS_KEEP: Set[str] = {
     "AIDE_SLACK_CHANNEL_ID",
     "AIDE_SLACK_THREAD_TS",
     "AIDE_DEFAULT_CHAT_ID",
+    # Database (core tools need access)
+    "DATABASE_URL",
     # Git
     "GIT_AUTHOR_NAME",
     "GIT_AUTHOR_EMAIL",
