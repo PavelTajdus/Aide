@@ -222,6 +222,8 @@ def _is_allowed(user_id: Optional[str], allowed: list[str]) -> bool:
 
 # ── Multi-user routing ────────────────────────────────────────────────
 
+_WORKSPACES_ROOT = Path(os.environ.get("AIDE_WORKSPACES_ROOT", "/opt/aide/workspaces"))
+
 _DB_POOL = None
 _DB_POOL_LOCK = threading.Lock()
 
@@ -444,6 +446,102 @@ def _get_slack_user_name(client: WebClient, slack_user_id: str) -> str:
         return name
     except Exception:
         return slack_user_id
+
+
+def _resolve_workspace(default_workspace: Path, user_context: Optional[Dict[str, Any]] = None) -> Path:
+    """Resolve per-user workspace path. Falls back to default if not found.
+
+    Logic:
+        - private scope + aide_user_id → /opt/aide/workspaces/{aide_user_id}/
+        - shared scope → default workspace
+        - No user workspace dir → default workspace (auto-init on first use)
+    """
+    if not user_context or not user_context.get("aide_user_id"):
+        return default_workspace
+
+    scope = user_context.get("scope", "shared")
+    if not scope.startswith("private"):
+        return default_workspace
+
+    user_id = user_context["aide_user_id"]
+    user_ws = _WORKSPACES_ROOT / user_id
+    sentinel = user_ws / ".initialized"
+    if sentinel.exists():
+        return user_ws
+
+    # Auto-initialize workspace for new user
+    try:
+        _init_user_workspace(user_ws, default_workspace)
+        return user_ws
+    except Exception:
+        # Clean up partial init
+        if user_ws.exists() and not sentinel.exists():
+            shutil.rmtree(str(user_ws), ignore_errors=True)
+        return default_workspace
+
+
+_INIT_LOCKS: Dict[str, threading.Lock] = {}
+_INIT_LOCKS_LOCK = threading.Lock()
+
+
+def _init_user_workspace(user_ws: Path, template_ws: Path) -> None:
+    """Initialize a new user workspace from the default template.
+
+    Thread-safe: uses per-user lock to prevent concurrent init.
+    Creates a .initialized sentinel on success.
+    """
+    ws_key = str(user_ws)
+    with _INIT_LOCKS_LOCK:
+        if ws_key not in _INIT_LOCKS:
+            _INIT_LOCKS[ws_key] = threading.Lock()
+        lock = _INIT_LOCKS[ws_key]
+
+    with lock:
+        # Double-check after acquiring lock
+        sentinel = user_ws / ".initialized"
+        if sentinel.exists():
+            return
+
+        user_ws.mkdir(parents=True, exist_ok=True)
+
+        # Create essential directories
+        for subdir in ["data", "data/logs", "inbox", "knowledge", "tasks", "decisions", "strategic"]:
+            (user_ws / subdir).mkdir(parents=True, exist_ok=True)
+
+        # Symlink tools and core_tools from template (shared, not copied)
+        for link_name in ["tools", "core_tools"]:
+            src = template_ws / link_name
+            dst = user_ws / link_name
+            if src.exists():
+                try:
+                    dst.symlink_to(src)
+                except FileExistsError:
+                    pass
+
+        # Run engine update.sh if available (sets up .claude/rules, skills symlinks)
+        engine_dir = Path(os.environ.get("AIDE_ENGINE", "/opt/aide/engine"))
+        update_sh = engine_dir / "scripts" / "update.sh"
+        if update_sh.exists():
+            subprocess.run([str(update_sh), str(user_ws)], timeout=30, capture_output=True)
+
+        # Symlink .env from template (tools use load_dotenv() from cwd)
+        env_src = template_ws / ".env"
+        env_dst = user_ws / ".env"
+        if env_src.exists():
+            try:
+                env_dst.symlink_to(env_src)
+            except FileExistsError:
+                pass
+
+        # Copy user-specific files that should be customizable
+        for fname in ["CLAUDE.md"]:
+            src = template_ws / fname
+            dst = user_ws / fname
+            if src.exists() and not dst.exists():
+                shutil.copy2(str(src), str(dst))
+
+        # Mark as successfully initialized
+        sentinel.write_text(datetime.now().isoformat())
 
 
 def _strip_mention(text: str, bot_user_id: Optional[str]) -> str:
@@ -1124,7 +1222,10 @@ def _process_message(
                 meta["last_tool_at"] = time.time()
 
     # Pass Slack context + user identity to agent subprocess via extra_env (thread-safe)
-    agent_extra_env: Dict[str, str] = {"AIDE_SLACK_CHANNEL_ID": channel_id}
+    agent_extra_env: Dict[str, str] = {
+        "AIDE_SLACK_CHANNEL_ID": channel_id,
+        "AIDE_WORKSPACE": str(workspace),
+    }
     if thread_root:
         agent_extra_env["AIDE_SLACK_THREAD_TS"] = thread_root
     if user_context:
@@ -1296,9 +1397,12 @@ def _handle_event(
             "user_context": user_context,
         }
 
+    # Resolve per-user workspace (private scope → user dir, shared → default)
+    resolved_ws = _resolve_workspace(workspace, user_context)
+
     thread = threading.Thread(
         target=_process_message,
-        args=(client, workspace, channel_id, thread_root, cleaned, files, bot_user_id, event_ts, user_context),
+        args=(client, resolved_ws, channel_id, thread_root, cleaned, files, bot_user_id, event_ts, user_context),
         daemon=True,
     )
     thread.start()
@@ -1331,6 +1435,16 @@ def main() -> None:
         bot_user_id = auth.get("user_id")
     except SlackApiError:
         bot_user_id = None
+
+    def _resolve_cmd_workspace(user_id: Optional[str], channel_id: str, channel_type: str = "channel") -> Path:
+        """Resolve workspace for slash commands and auto-thread checks."""
+        slack_name = _get_slack_user_name(client, user_id) if user_id else ""
+        aide_user_id = _resolve_user(user_id, slack_name) if user_id else None
+        routing = _resolve_channel_scope(channel_id, channel_type, aide_user_id)
+        if not aide_user_id and routing["scope"] == "private":
+            routing = {"scope": "shared", "owner_id": None, "via": "default"}
+        uc = {"aide_user_id": aide_user_id, "scope": routing["scope"]}
+        return _resolve_workspace(workspace, uc)
 
     @app.event("app_mention")
     def handle_mention(body, event, logger):
@@ -1391,7 +1505,15 @@ def main() -> None:
             if bot_user_id and f"<@{bot_user_id}>" in (event.get("text") or ""):
                 return
             # Only respond if we already have a session for this thread
-            if not _get_session_id(workspace, channel_id, thread_ts):
+            # Check both default and per-user workspace for session
+            has_session = _get_session_id(workspace, channel_id, thread_ts)
+            if not has_session:
+                uid = event.get("user")
+                if uid:
+                    auto_ws = _resolve_cmd_workspace(uid, channel_id, channel_type or "channel")
+                    if auto_ws != workspace:
+                        has_session = _get_session_id(auto_ws, channel_id, thread_ts)
+            if not has_session:
                 return
             _handle_event(
                 client,
@@ -1414,8 +1536,9 @@ def main() -> None:
         channel_id = body.get("channel_id")
         if not _is_allowed(user_id, allowed):
             return
+        cmd_ws = _resolve_cmd_workspace(user_id, channel_id)
         # Clear all sessions for this channel
-        path = _sessions_path(workspace)
+        path = _sessions_path(cmd_ws)
         with file_lock(path):
             data = load_json(path, {})
             to_remove = [k for k in data if k.startswith(f"{channel_id}:")]
@@ -1423,7 +1546,7 @@ def main() -> None:
                 data.pop(k, None)
             atomic_write_json(path, data)
         # Clear all runtime options for this channel too
-        opts_path = _session_options_path(workspace)
+        opts_path = _session_options_path(cmd_ws)
         with file_lock(opts_path):
             opts = load_json(opts_path, {})
             to_remove = [k for k in opts if k.startswith(f"{channel_id}:")]
@@ -1464,8 +1587,9 @@ def main() -> None:
         if not _is_allowed(user_id, allowed):
             return
 
+        cmd_ws = _resolve_cmd_workspace(user_id, channel_id)
         # Get ALL sessions for this channel (root + threads)
-        path = _sessions_path(workspace)
+        path = _sessions_path(cmd_ws)
         with file_lock(path):
             data = load_json(path, {})
 
@@ -1482,7 +1606,7 @@ def main() -> None:
             thread_ts = key.split(":", 1)[1] if ":" in key else "root"
             thread_label = "channel" if thread_ts == "root" else "thread"
 
-            usage_info = get_session_usage(session_id, working_dir=workspace)
+            usage_info = get_session_usage(session_id, working_dir=cmd_ws)
             if not usage_info:
                 messages.append(f"*{thread_label}:* `{session_id[:8]}...` - cannot get info")
                 continue
@@ -1513,6 +1637,7 @@ def main() -> None:
         channel_id = body.get("channel_id")
         if not _is_allowed(user_id, allowed):
             return
+        cmd_ws = _resolve_cmd_workspace(user_id, channel_id)
         thread_root = _slash_thread_root(body)
         text = str(body.get("text", "")).strip()
         raw = f"model {text}".strip()
@@ -1525,7 +1650,7 @@ def main() -> None:
                 thread_root,
             )
             return
-        _execute_runtime_command(client, workspace, channel_id, thread_root, runtime_cmd, thread_root)
+        _execute_runtime_command(client, cmd_ws, channel_id, thread_root, runtime_cmd, thread_root)
 
     @app.command("/effort")
     def handle_effort_command(ack, body, logger):
@@ -1534,6 +1659,7 @@ def main() -> None:
         channel_id = body.get("channel_id")
         if not _is_allowed(user_id, allowed):
             return
+        cmd_ws = _resolve_cmd_workspace(user_id, channel_id)
         thread_root = _slash_thread_root(body)
         text = str(body.get("text", "")).strip()
         raw = f"effort {text}".strip()
@@ -1541,7 +1667,7 @@ def main() -> None:
         if not runtime_cmd:
             _post_message(client, channel_id, "Použití: `/effort low` nebo `/effort extra high`", thread_root)
             return
-        _execute_runtime_command(client, workspace, channel_id, thread_root, runtime_cmd, thread_root)
+        _execute_runtime_command(client, cmd_ws, channel_id, thread_root, runtime_cmd, thread_root)
 
     @app.command("/profile")
     def handle_profile_command(ack, body, logger):
@@ -1550,6 +1676,7 @@ def main() -> None:
         channel_id = body.get("channel_id")
         if not _is_allowed(user_id, allowed):
             return
+        cmd_ws = _resolve_cmd_workspace(user_id, channel_id)
         thread_root = _slash_thread_root(body)
         text = str(body.get("text", "")).strip()
         raw = f"profile {text}".strip()
@@ -1557,7 +1684,7 @@ def main() -> None:
         if not runtime_cmd:
             _post_message(client, channel_id, "Použití: `/profile default` nebo `/profile reset`", thread_root)
             return
-        _execute_runtime_command(client, workspace, channel_id, thread_root, runtime_cmd, thread_root)
+        _execute_runtime_command(client, cmd_ws, channel_id, thread_root, runtime_cmd, thread_root)
 
     @app.command("/alive")
     def handle_alive_command(ack, body, logger):
