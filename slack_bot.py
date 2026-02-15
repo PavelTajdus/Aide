@@ -220,6 +220,159 @@ def _is_allowed(user_id: Optional[str], allowed: list[str]) -> bool:
     return user_id in allowed
 
 
+# ── Multi-user routing ────────────────────────────────────────────────
+
+
+def _db_conn():
+    """Get a Postgres connection if DATABASE_URL is set."""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        return None
+    try:
+        import psycopg2
+        return psycopg2.connect(url)
+    except Exception:
+        return None
+
+
+_USER_CACHE: Dict[str, str] = {}  # slack_user_id → aide_user_id
+
+
+def _resolve_user(slack_user_id: str, slack_name: str = "") -> Optional[str]:
+    """Lookup or auto-create DB user from Slack user_id. Returns aide user UUID string or None."""
+    if slack_user_id in _USER_CACHE:
+        return _USER_CACHE[slack_user_id]
+    conn = _db_conn()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE slack_id = %s", (slack_user_id,))
+            row = cur.fetchone()
+            if row:
+                uid = str(row[0])
+                _USER_CACHE[slack_user_id] = uid
+                return uid
+            # Auto-create user on first contact
+            import uuid
+            user_id = str(uuid.uuid4())
+            name = slack_name or slack_user_id
+            cur.execute(
+                "INSERT INTO users (id, slack_id, name, role) VALUES (%s, %s, %s, 'user') "
+                "ON CONFLICT (slack_id) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+                (user_id, slack_user_id, name),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            uid = str(row[0]) if row else user_id
+            _USER_CACHE[slack_user_id] = uid
+            return uid
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def _resolve_channel_scope(channel_id: str, channel_type: str, aide_user_id: Optional[str]) -> Dict[str, Any]:
+    """Determine scope for a channel.
+
+    Returns dict with keys:
+        scope: 'private' | 'shared' | 'shared:<project>'
+        owner_id: UUID string of claim owner (or None)
+        via: 'dm' | 'claim' | 'default'
+    """
+    # DMs are always private
+    if channel_type == "im":
+        return {"scope": "private", "owner_id": aide_user_id, "via": "dm"}
+
+    # Check channel_claims table
+    conn = _db_conn()
+    if not conn:
+        return {"scope": "shared", "owner_id": None, "via": "default"}
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT owner_id, scope, allowed_users FROM channel_claims WHERE channel_id = %s",
+                (channel_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                owner_id, scope, allowed = row
+                return {"scope": scope, "owner_id": str(owner_id) if owner_id else None, "via": "claim"}
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+    # No claim → shared
+    return {"scope": "shared", "owner_id": None, "via": "default"}
+
+
+def _claim_channel(aide_user_id: str, channel_id: str, scope: str) -> Dict[str, Any]:
+    """Create or update a channel claim. Returns success/error dict."""
+    conn = _db_conn()
+    if not conn:
+        return {"success": False, "error": "DB not available"}
+    try:
+        with conn.cursor() as cur:
+            # Check existing claim
+            cur.execute("SELECT owner_id FROM channel_claims WHERE channel_id = %s", (channel_id,))
+            row = cur.fetchone()
+            if row and str(row[0]) != aide_user_id:
+                return {"success": False, "error": "Channel already claimed by another user"}
+            cur.execute(
+                """INSERT INTO channel_claims (channel_id, owner_id, scope)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (channel_id) DO UPDATE SET scope = EXCLUDED.scope, owner_id = EXCLUDED.owner_id""",
+                (channel_id, aide_user_id, scope),
+            )
+        conn.commit()
+        return {"success": True, "scope": scope}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    finally:
+        conn.close()
+
+
+def _unclaim_channel(aide_user_id: str, channel_id: str) -> Dict[str, Any]:
+    """Remove a channel claim. Only the owner can unclaim."""
+    conn = _db_conn()
+    if not conn:
+        return {"success": False, "error": "DB not available"}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT owner_id FROM channel_claims WHERE channel_id = %s", (channel_id,))
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "error": "No claim exists for this channel"}
+            if str(row[0]) != aide_user_id:
+                return {"success": False, "error": "You don't own this claim"}
+            cur.execute("DELETE FROM channel_claims WHERE channel_id = %s", (channel_id,))
+        conn.commit()
+        return {"success": True}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    finally:
+        conn.close()
+
+
+_SLACK_NAME_CACHE: Dict[str, str] = {}
+
+
+def _get_slack_user_name(client: WebClient, slack_user_id: str) -> str:
+    """Fetch Slack display name for a user (cached in memory)."""
+    if slack_user_id in _SLACK_NAME_CACHE:
+        return _SLACK_NAME_CACHE[slack_user_id]
+    try:
+        resp = client.users_info(user=slack_user_id)
+        user = resp.get("user", {})
+        name = user.get("real_name") or user.get("name") or slack_user_id
+        _SLACK_NAME_CACHE[slack_user_id] = name
+        return name
+    except Exception:
+        return slack_user_id
+
+
 def _strip_mention(text: str, bot_user_id: Optional[str]) -> str:
     if not text:
         return ""
@@ -733,6 +886,7 @@ def _process_message(
     files: list[Dict[str, Any]],
     bot_user_id: Optional[str] = None,
     event_ts: Optional[str] = None,
+    user_context: Optional[Dict[str, Any]] = None,
 ) -> None:
     key = _session_key(channel_id, thread_root)
     cmd = _handle_command(text)
@@ -896,10 +1050,17 @@ def _process_message(
                 meta["last_tool"] = _progress_text(name, inp)
                 meta["last_tool_at"] = time.time()
 
-    # Pass Slack context to agent subprocess via extra_env (thread-safe)
+    # Pass Slack context + user identity to agent subprocess via extra_env (thread-safe)
     agent_extra_env: Dict[str, str] = {"AIDE_SLACK_CHANNEL_ID": channel_id}
     if thread_root:
         agent_extra_env["AIDE_SLACK_THREAD_TS"] = thread_root
+    if user_context:
+        if user_context.get("aide_user_id"):
+            agent_extra_env["AIDE_USER_ID"] = user_context["aide_user_id"]
+        if user_context.get("scope"):
+            agent_extra_env["AIDE_SCOPE"] = user_context["scope"]
+        if user_context.get("slack_user_id"):
+            agent_extra_env["AIDE_SLACK_USER_ID"] = user_context["slack_user_id"]
 
     try:
         answer, new_session_id, _tool_log = run_agent(
@@ -989,8 +1150,12 @@ def _process_next_in_queue(
             last_event_ts = e
     merged_text = "\n\n".join(texts)
 
+    # Retrieve user_context from running meta (set by _handle_event)
+    meta = RUNNING_META.get(key, {})
+    uc = meta.get("user_context")
+
     # Process in current thread (already a daemon thread)
-    _process_message(client, workspace, channel_id, thread_root, merged_text, all_files, bot_uid, last_event_ts)
+    _process_message(client, workspace, channel_id, thread_root, merged_text, all_files, bot_uid, last_event_ts, uc)
 
 
 def _add_reaction(client: WebClient, channel_id: str, timestamp: str, emoji: str = "eyes") -> None:
@@ -1018,9 +1183,23 @@ def _handle_event(
     text: str,
     files: list[Dict[str, Any]],
     event_ts: Optional[str] = None,
+    channel_type: str = "im",
 ) -> None:
     if not _is_allowed(user_id, allowed):
         return
+
+    # Resolve user identity (Slack → DB)
+    slack_name = _get_slack_user_name(client, user_id) if user_id else ""
+    aide_user_id = _resolve_user(user_id, slack_name) if user_id else None
+
+    # Resolve channel scope
+    routing = _resolve_channel_scope(channel_id, channel_type, aide_user_id)
+    user_context: Dict[str, Any] = {
+        "aide_user_id": aide_user_id,
+        "slack_user_id": user_id,
+        "scope": routing["scope"],
+        "channel_via": routing["via"],
+    }
 
     cleaned = _strip_mention(text, bot_user_id)
     key = _session_key(channel_id, thread_root)
@@ -1039,11 +1218,12 @@ def _handle_event(
             "last_tool": None,
             "last_tool_at": None,
             "prompt_preview": cleaned[:80] if cleaned else "",
+            "user_context": user_context,
         }
 
     thread = threading.Thread(
         target=_process_message,
-        args=(client, workspace, channel_id, thread_root, cleaned, files, bot_user_id, event_ts),
+        args=(client, workspace, channel_id, thread_root, cleaned, files, bot_user_id, event_ts, user_context),
         daemon=True,
     )
     thread.start()
@@ -1083,6 +1263,7 @@ def main() -> None:
         if not channel_id:
             return
         thread_root = event.get("thread_ts") or event.get("ts")
+        ch_type = event.get("channel_type") or "channel"
         _handle_event(
             client,
             workspace,
@@ -1094,6 +1275,7 @@ def main() -> None:
             event.get("text", ""),
             event.get("files", []) or [],
             event_ts=event.get("ts"),
+            channel_type=ch_type,
         )
 
     @app.event("message")
@@ -1121,6 +1303,7 @@ def main() -> None:
                 event.get("text", ""),
                 event.get("files", []) or [],
                 event_ts=event.get("ts"),
+                channel_type="im",
             )
             return
 
@@ -1146,6 +1329,7 @@ def main() -> None:
                 event.get("text", ""),
                 event.get("files", []) or [],
                 event_ts=event.get("ts"),
+                channel_type=channel_type or "channel",
             )
 
     @app.command("/new")
