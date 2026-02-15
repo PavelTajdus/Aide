@@ -896,12 +896,10 @@ def _process_message(
                 meta["last_tool"] = _progress_text(name, inp)
                 meta["last_tool_at"] = time.time()
 
-    # Pass Slack context to agent env so core_tools (e.g. slack_upload) can use it
-    os.environ["AIDE_SLACK_CHANNEL_ID"] = channel_id
+    # Pass Slack context to agent subprocess via extra_env (thread-safe)
+    agent_extra_env: Dict[str, str] = {"AIDE_SLACK_CHANNEL_ID": channel_id}
     if thread_root:
-        os.environ["AIDE_SLACK_THREAD_TS"] = thread_root
-    else:
-        os.environ.pop("AIDE_SLACK_THREAD_TS", None)
+        agent_extra_env["AIDE_SLACK_THREAD_TS"] = thread_root
 
     try:
         answer, new_session_id, _tool_log = run_agent(
@@ -911,6 +909,7 @@ def _process_message(
             process_cb=_process_cb,
             tool_cb=_tool_cb,
             backend_options=session_options,
+            extra_env=agent_extra_env,
         )
     except Exception as exc:
         RUNNING.pop(key, None)

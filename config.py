@@ -33,9 +33,21 @@ def resolve_workspace(workspace_arg: Optional[str] = None) -> Path:
 
 
 def load_workspace_env(workspace_path: Path) -> None:
+    """Load workspace .env into os.environ (startup only, NOT thread-safe)."""
     env_path = workspace_path / ".env"
     if env_path.exists():
         load_dotenv(env_path, override=True)
+
+
+def read_workspace_env(workspace_path: Path) -> dict[str, str]:
+    """Read workspace .env as a dict without mutating os.environ."""
+    from dotenv import dotenv_values
+
+    env_path = workspace_path / ".env"
+    if not env_path.exists():
+        return {}
+    values = dotenv_values(env_path)
+    return {k: v for k, v in values.items() if v is not None}
 
 
 def get_allowed_users() -> List[int]:

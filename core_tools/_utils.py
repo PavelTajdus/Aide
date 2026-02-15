@@ -33,9 +33,21 @@ def resolve_workspace() -> Path:
 
 
 def load_workspace_env(workspace: Path) -> None:
+    """Load workspace .env into os.environ (startup only, NOT thread-safe)."""
     env_path = workspace / ".env"
     if env_path.exists():
         load_dotenv(env_path, override=True)
+
+
+def read_workspace_env(workspace: Path) -> dict[str, str]:
+    """Read workspace .env as a dict without mutating os.environ."""
+    from dotenv import dotenv_values
+
+    env_path = workspace / ".env"
+    if not env_path.exists():
+        return {}
+    values = dotenv_values(env_path)
+    return {k: v for k, v in values.items() if v is not None}
 
 
 def load_json(path: Path, default: Any) -> Any:

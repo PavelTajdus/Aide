@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from backends import get_backend
-from config import load_workspace_env, resolve_workspace
+from config import read_workspace_env, resolve_workspace
 from env_sanitizer import sanitize_env
 
 Event = Dict[str, object]
@@ -36,16 +36,32 @@ def _parse_json_line(line: str) -> Optional[Event]:
         return None
 
 
+def _build_subprocess_env(
+    working_dir: Path,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """Build an isolated env dict for a subprocess.
+
+    Merges: os.environ (base) + workspace .env + extra_env.
+    Then sanitizes (removes secrets).  Never mutates os.environ.
+    """
+    env = dict(os.environ)
+    env.update(read_workspace_env(working_dir))
+    if extra_env:
+        env.update(extra_env)
+    return sanitize_env(env)
+
+
 def get_session_usage(
     session_id: str,
     working_dir: Optional[Path] = None,
     timeout_s: int = 30,
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> Optional[Dict]:
     """Get usage info for a session (backend-dependent)."""
     if working_dir is None:
         working_dir = resolve_workspace()
 
-    load_workspace_env(working_dir)
     backend = get_backend()
 
     cmd = backend.build_usage_cmd(session_id, working_dir)
@@ -59,7 +75,7 @@ def get_session_usage(
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            env=sanitize_env(),
+            env=_build_subprocess_env(working_dir, extra_env),
         )
         if result.returncode != 0:
             return None
@@ -80,11 +96,10 @@ def run_agent(
     tool_cb: Optional[Callable[[str, Dict], None]] = None,
     backend_options: Optional[Dict[str, Any]] = None,
     backend_name: Optional[str] = None,
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, Optional[str], List[Event]]:
     if working_dir is None:
         working_dir = resolve_workspace()
-
-    load_workspace_env(working_dir)
 
     backend = get_backend(backend_name)
     backend.gen_context(working_dir)
@@ -103,7 +118,7 @@ def run_agent(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
-        env=sanitize_env(),
+        env=_build_subprocess_env(working_dir, extra_env),
     )
 
     if process_cb:
