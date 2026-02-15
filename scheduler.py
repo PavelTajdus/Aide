@@ -126,20 +126,85 @@ def _task_id(task: Dict[str, Any]) -> str:
     return task.get("id", task.get("title", ""))
 
 
-def _load_heartbeat_tasks_db() -> Optional[List[Dict[str, Any]]]:
-    """Load open tasks with due dates from Postgres."""
+
+def _log_heartbeat_db(user_id: Optional[str], event_type: str, task_ids: List[str], action: str) -> None:
+    """Log heartbeat actions to DB for dedup and audit."""
+    conn = _db_conn()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            for tid in task_ids:
+                cur.execute(
+                    "INSERT INTO heartbeat_log (user_id, event_type, reference_id, action) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (user_id, event_type, tid if _is_uuid(tid) else None, action),
+                )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
+def _is_uuid(val: str) -> bool:
+    try:
+        import uuid
+        uuid.UUID(val)
+        return True
+    except (ValueError, AttributeError):
+        return False
+
+
+def _heartbeat_reported_today_db(user_id: Optional[str]) -> Optional[set]:
+    """Get task IDs already reported today from heartbeat_log.
+
+    Returns None on DB failure (caller should fallback to JSON).
+    Returns empty set if DB works but nothing reported yet.
+    """
     conn = _db_conn()
     if not conn:
         return None
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, title, status, priority, project, due_date, remind_at "
-                "FROM tasks WHERE status = 'open' AND due_date IS NOT NULL"
+                "SELECT reference_id FROM heartbeat_log "
+                "WHERE event_type = 'task_reminder' "
+                "AND created_at::date = CURRENT_DATE "
+                "AND (%s IS NULL OR user_id = %s)",
+                (user_id, user_id),
             )
+            return {str(row[0]) for row in cur.fetchall() if row[0]}
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def _load_heartbeat_tasks_for_user(user_id: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+    """Load open tasks with due dates from Postgres, filtered by user."""
+    conn = _db_conn()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            if user_id:
+                cur.execute(
+                    "SELECT id, title, status, priority, project, due_date, remind_at "
+                    "FROM tasks WHERE status = 'open' AND due_date IS NOT NULL "
+                    "AND (user_id = %s OR user_id IS NULL)",
+                    (user_id,),
+                )
+            else:
+                cur.execute(
+                    "SELECT id, title, status, priority, project, due_date, remind_at "
+                    "FROM tasks WHERE status = 'open' AND due_date IS NOT NULL"
+                )
             cols = [d[0] for d in cur.description]
             rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-            # Convert due_date to 'due' string for compat
             for r in rows:
                 dd = r.get("due_date")
                 if dd:
@@ -151,22 +216,21 @@ def _load_heartbeat_tasks_db() -> Optional[List[Dict[str, Any]]]:
         conn.close()
 
 
-def _execute_heartbeat_job(workspace: Path) -> None:
+def _execute_heartbeat_job(workspace: Path, slack_user_id: Optional[str] = None, user_id: Optional[str] = None) -> None:
     now_hour = datetime.now().hour
     start_hour, end_hour = _heartbeat_hours()
     if now_hour < start_hour or now_hour >= end_hour:
         _log_line(workspace, f"Heartbeat: outside working hours ({start_hour}-{end_hour}), skipping")
         return
 
-    heartbeat_path = workspace / "data" / "last_heartbeat.json"
     overdue: List[Dict[str, Any]] = []
     upcoming: List[Dict[str, Any]] = []
     now = datetime.now()
     soon_hours = _heartbeat_soon_hours()
     soon_cutoff = now + timedelta(hours=soon_hours)
 
-    # Try Postgres first, fallback to JSON
-    db_tasks = _load_heartbeat_tasks_db()
+    # Try Postgres first (per-user filtered), fallback to JSON
+    db_tasks = _load_heartbeat_tasks_for_user(user_id)
     if db_tasks is not None:
         tasks = db_tasks
     else:
@@ -189,15 +253,19 @@ def _execute_heartbeat_job(workspace: Path) -> None:
         _log_line(workspace, "Heartbeat: nothing to report")
         return
 
-    # Dedup: only report tasks not yet reported today
-    last_hb: Dict[str, Any] = {}
-    try:
-        last_hb = json.loads(heartbeat_path.read_text()) if heartbeat_path.exists() else {}
-    except Exception:
-        pass
-
-    today = now.date().isoformat()
-    reported_ids: set = set(last_hb.get("reported_ids", [])) if last_hb.get("date") == today else set()
+    # Dedup: check DB first, fallback to local file
+    db_reported = _heartbeat_reported_today_db(user_id)
+    if db_reported is not None:
+        reported_ids = db_reported
+    else:
+        heartbeat_path = workspace / "data" / "last_heartbeat.json"
+        last_hb: Dict[str, Any] = {}
+        try:
+            last_hb = json.loads(heartbeat_path.read_text()) if heartbeat_path.exists() else {}
+        except Exception:
+            pass
+        today = now.date().isoformat()
+        reported_ids = set(last_hb.get("reported_ids", [])) if last_hb.get("date") == today else set()
 
     new_overdue = [item for item in overdue if _task_id(item["task"]) not in reported_ids]
     new_upcoming = [item for item in upcoming if _task_id(item["task"]) not in reported_ids]
@@ -217,27 +285,51 @@ def _execute_heartbeat_job(workspace: Path) -> None:
         lines.append(f"Blížící se ({len(new_upcoming)}):")
         lines.extend(_format_task_line(item["task"], item["due"]) for item in new_upcoming)
 
-    # Track all task IDs (old + new) so we never re-report
-    all_ids = reported_ids | {_task_id(item["task"]) for item in overdue + upcoming}
+    new_task_ids = [_task_id(item["task"]) for item in new_overdue + new_upcoming]
 
     try:
-        send_message("\n".join(lines))
+        send_message("\n".join(lines), chat_id=slack_user_id)
+        # Log to DB for dedup
+        _log_heartbeat_db(user_id, "task_reminder", new_task_ids, "sent")
+        # Also write local file as fallback
+        heartbeat_path = workspace / "data" / "last_heartbeat.json"
+        all_ids = reported_ids | set(new_task_ids)
         heartbeat_path.write_text(json.dumps({
             "reported_ids": sorted(all_ids),
-            "date": today,
+            "date": now.date().isoformat(),
             "sent_at": now.isoformat(),
         }))
     except Exception as exc:
         _log_line(workspace, f"Heartbeat failed: {exc}")
 
 
-def _execute_cron_job(workspace: Path, job_id: Optional[str], prompt: str) -> None:
+_WORKSPACES_ROOT = Path(os.environ.get("AIDE_WORKSPACES_ROOT", "/opt/aide/workspaces"))
+
+
+def _resolve_job_workspace(default_workspace: Path, user_id: Optional[str]) -> Path:
+    """Resolve workspace for a cron job. Per-user if user_id set, else default."""
+    if not user_id:
+        return default_workspace
+    user_ws = _WORKSPACES_ROOT / str(user_id)
+    if user_ws.exists():
+        return user_ws
+    return default_workspace
+
+
+def _execute_cron_job(
+    workspace: Path,
+    job_id: Optional[str],
+    prompt: str,
+    job_type: str = "cron",
+    slack_user_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> None:
     try:
-        if job_id == "heartbeat":
-            _execute_heartbeat_job(workspace)
+        if job_type == "heartbeat" or job_id == "heartbeat":
+            _execute_heartbeat_job(workspace, slack_user_id=slack_user_id, user_id=user_id)
             return
         answer, _sid, _tool_log = run_agent(prompt, working_dir=workspace)
-        send_message(answer)
+        send_message(answer, chat_id=slack_user_id)
     except Exception as exc:
         _log_line(workspace, f"Cron job failed ({job_id}): {exc}")
 
@@ -251,12 +343,20 @@ def _run_cron_jobs_db(workspace: Path, now: datetime, executor: ThreadPoolExecut
         due_jobs: List[Dict[str, Any]] = []
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, schedule, task, last_run FROM cron_jobs WHERE enabled = true"
+                "SELECT c.id, c.schedule, c.task, c.last_run, c.type, c.user_id, "
+                "       u.slack_id, u.active "
+                "FROM cron_jobs c "
+                "LEFT JOIN users u ON c.user_id = u.id "
+                "WHERE c.enabled = true"
             )
             cols = [d[0] for d in cur.description]
             jobs = [dict(zip(cols, row)) for row in cur.fetchall()]
 
         for job in jobs:
+            # Skip jobs for inactive users
+            if job.get("user_id") and job.get("active") is False:
+                continue
+
             schedule = job.get("schedule")
             prompt = job.get("task")
             if not schedule or not prompt:
@@ -274,7 +374,13 @@ def _run_cron_jobs_db(workspace: Path, now: datetime, executor: ThreadPoolExecut
                 _log_line(workspace, f"Invalid cron schedule ({job.get('id')}): {schedule} ({exc})")
                 continue
 
-            due_jobs.append({"id": job.get("id"), "prompt": prompt})
+            due_jobs.append({
+                "id": job.get("id"),
+                "prompt": prompt,
+                "type": job.get("type", "cron"),
+                "user_id": str(job["user_id"]) if job.get("user_id") else None,
+                "slack_id": job.get("slack_id"),
+            })
 
         # Update last_run for due jobs
         if due_jobs:
@@ -287,8 +393,17 @@ def _run_cron_jobs_db(workspace: Path, now: datetime, executor: ThreadPoolExecut
             conn.commit()
 
         for job in due_jobs:
-            _log_line(workspace, f"Scheduling cron job {job.get('id')}")
-            executor.submit(_execute_cron_job, workspace, job.get("id"), job["prompt"])
+            job_ws = _resolve_job_workspace(workspace, job.get("user_id"))
+            _log_line(workspace, f"Scheduling cron job {job.get('id')} (type={job.get('type')}, user={job.get('user_id', 'system')})")
+            executor.submit(
+                _execute_cron_job,
+                job_ws,
+                job.get("id"),
+                job["prompt"],
+                job.get("type", "cron"),
+                job.get("slack_id"),
+                job.get("user_id"),
+            )
 
         return True
     except Exception as exc:
@@ -350,20 +465,30 @@ def _run_task_reminders_db(workspace: Path, now: datetime) -> bool:
         due: List[Dict[str, Any]] = []
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, title, project, remind_at, remind_sent_at "
-                "FROM tasks WHERE status = 'open' AND remind_at IS NOT NULL "
-                "AND remind_at <= %s AND (remind_sent_at IS NULL OR remind_sent_at < remind_at)",
+                "SELECT t.id, t.title, t.project, t.remind_at, t.remind_sent_at, "
+                "       u.slack_id, u.active "
+                "FROM tasks t "
+                "LEFT JOIN users u ON t.user_id = u.id "
+                "WHERE t.status = 'open' AND t.remind_at IS NOT NULL "
+                "AND t.remind_at <= %s AND (t.remind_sent_at IS NULL OR t.remind_sent_at < t.remind_at)",
                 (now,),
             )
             cols = [d[0] for d in cur.description]
             for row in cur.fetchall():
                 task = dict(zip(cols, row))
+                # Skip tasks for inactive users
+                if task.get("active") is False:
+                    continue
                 title = task.get("title", "(untitled)")
                 project = task.get("project")
                 message = f"Reminder: {title}"
                 if project:
                     message += f" (project: {project})"
-                due.append({"id": str(task["id"]), "message": message})
+                due.append({
+                    "id": str(task["id"]),
+                    "message": message,
+                    "slack_id": task.get("slack_id"),
+                })
 
         if not due:
             return True
@@ -371,7 +496,7 @@ def _run_task_reminders_db(workspace: Path, now: datetime) -> bool:
         sent_ids: List[str] = []
         for item in due:
             try:
-                send_message(item["message"])
+                send_message(item["message"], chat_id=item.get("slack_id"))
                 sent_ids.append(item["id"])
             except Exception as exc:
                 _log_line(workspace, f"Reminder failed: {exc}")
