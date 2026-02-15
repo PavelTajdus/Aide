@@ -308,8 +308,15 @@ def _resolve_channel_scope(channel_id: str, channel_type: str, aide_user_id: Opt
     return {"scope": "shared", "owner_id": None, "via": "default"}
 
 
+_VALID_SCOPES = {"private", "shared"}
+
+
 def _claim_channel(aide_user_id: str, channel_id: str, scope: str) -> Dict[str, Any]:
     """Create or update a channel claim. Returns success/error dict."""
+    # Validate scope (allow "shared:project_name" pattern)
+    base_scope = scope.split(":")[0] if ":" in scope else scope
+    if base_scope not in _VALID_SCOPES:
+        return {"success": False, "error": f"Invalid scope '{scope}'. Use: private, shared, shared:<project>"}
     conn = _db_conn()
     if not conn:
         return {"success": False, "error": "DB not available"}
@@ -1183,7 +1190,7 @@ def _handle_event(
     text: str,
     files: list[Dict[str, Any]],
     event_ts: Optional[str] = None,
-    channel_type: str = "im",
+    channel_type: str = "channel",
 ) -> None:
     if not _is_allowed(user_id, allowed):
         return
@@ -1192,8 +1199,10 @@ def _handle_event(
     slack_name = _get_slack_user_name(client, user_id) if user_id else ""
     aide_user_id = _resolve_user(user_id, slack_name) if user_id else None
 
-    # Resolve channel scope
+    # Resolve channel scope (fall back to shared if user identity unavailable)
     routing = _resolve_channel_scope(channel_id, channel_type, aide_user_id)
+    if not aide_user_id and routing["scope"] == "private":
+        routing = {"scope": "shared", "owner_id": None, "via": "default"}
     user_context: Dict[str, Any] = {
         "aide_user_id": aide_user_id,
         "slack_user_id": user_id,
