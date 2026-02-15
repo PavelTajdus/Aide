@@ -1807,7 +1807,7 @@ def main() -> None:
 
     # ── Admin commands ──────────────────────────────────────────────────
 
-    @app.command("/invite")
+    @app.command("/aide-invite")
     def handle_invite_command(ack, body, logger):
         """Invite a Slack user to Aide. Admin only. Usage: /invite @user"""
         ack()
@@ -1824,7 +1824,7 @@ def main() -> None:
 
         text = str(body.get("text", "")).strip()
         if not text:
-            _post_message(client, channel_id, "Usage: `/invite @user` or `/invite U12345 Jméno`")
+            _post_message(client, channel_id, "Usage: `/aide-invite @user` or `/aide-invite U12345 Jméno`")
             return
 
         # Parse: either @mention (Slack transforms to <@U12345>) or "U12345 Name"
@@ -1875,7 +1875,7 @@ def main() -> None:
         else:
             _post_message(client, channel_id, "DB not available.")
 
-    @app.command("/users")
+    @app.command("/aide-users")
     def handle_users_command(ack, body, logger):
         """List all Aide users. Admin only."""
         ack()
@@ -1918,7 +1918,7 @@ def main() -> None:
             lines.append(f"  <@{slack_id}> — {name}{role_tag} [{status}]")
         _post_message(client, channel_id, "\n".join(lines))
 
-    @app.command("/admin")
+    @app.command("/aide-admin")
     def handle_admin_command(ack, body, logger):
         """Admin overview. Usage: /admin [overview|users|claims]"""
         ack()
