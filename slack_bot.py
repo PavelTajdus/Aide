@@ -1247,6 +1247,8 @@ def _process_message(
             extra_env=agent_extra_env,
         )
     except Exception as exc:
+        # Save user_context before popping meta (needed for queued messages)
+        _saved_uc = RUNNING_META.get(key, {}).get("user_context")
         RUNNING.pop(key, None)
         RUNNING_META.pop(key, None)
         if progress_q:
@@ -1259,7 +1261,7 @@ def _process_message(
             _delete_message(client, channel_id, progress_ts["ts"])
         _post_message(client, channel_id, f"Error: {exc}", thread_root)
         # Still process queued messages after error
-        _process_next_in_queue(client, workspace, channel_id, thread_root, key)
+        _process_next_in_queue(client, workspace, channel_id, thread_root, key, _saved_uc)
         return
 
     if progress_q:
@@ -1267,6 +1269,8 @@ def _process_message(
     if progress_thread:
         progress_thread.join(timeout=2)
 
+    # Save user_context before popping meta (needed for queued messages)
+    _saved_uc = RUNNING_META.get(key, {}).get("user_context")
     RUNNING.pop(key, None)
     RUNNING_META.pop(key, None)
 
@@ -1291,7 +1295,7 @@ def _process_message(
         _post_message(client, channel_id, chunk, thread_root)
 
     # Process next queued message if any
-    _process_next_in_queue(client, workspace, channel_id, thread_root, key)
+    _process_next_in_queue(client, workspace, channel_id, thread_root, key, _saved_uc)
 
 
 def _process_next_in_queue(
@@ -1300,6 +1304,7 @@ def _process_next_in_queue(
     channel_id: str,
     thread_root: Optional[str],
     key: str,
+    user_context: Optional[Dict[str, str]] = None,
 ) -> None:
     """Check queue and process next queued messages if any. Merges all into one prompt."""
     with THREAD_QUEUES_LOCK:
@@ -1324,12 +1329,8 @@ def _process_next_in_queue(
             last_event_ts = e
     merged_text = "\n\n".join(texts)
 
-    # Retrieve user_context from running meta (set by _handle_event)
-    meta = RUNNING_META.get(key, {})
-    uc = meta.get("user_context")
-
     # Process in current thread (already a daemon thread)
-    _process_message(client, workspace, channel_id, thread_root, merged_text, all_files, bot_uid, last_event_ts, uc)
+    _process_message(client, workspace, channel_id, thread_root, merged_text, all_files, bot_uid, last_event_ts, user_context)
 
 
 def _add_reaction(client: WebClient, channel_id: str, timestamp: str, emoji: str = "eyes") -> None:

@@ -44,9 +44,9 @@ def build_cmd(
 # ── Context generation ───────────────────────────────────────────────────
 
 
-def gen_context(workspace: Path) -> None:
+def gen_context(workspace: Path, user_id: str = None) -> None:
     """Generate context files for Claude Code (CLAUDE.md + .claude/rules/auto/)."""
-    generate_auto_context(workspace)
+    generate_auto_context(workspace, user_id=user_id)
 
 
 # ── Event parsing helpers (moved from agent.py) ─────────────────────────

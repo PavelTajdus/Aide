@@ -249,11 +249,17 @@ def get_mem(workspace: Path, ids: List[str]) -> None:
 
     import psycopg2.extras
 
+    user_id = _get_user_id()
+    user_sql, user_params = _user_filter(user_id)
+
     conn = _get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             placeholders = ",".join(["%s"] * len(ids))
-            cur.execute(f"SELECT * FROM memories WHERE id IN ({placeholders})", ids)
+            cur.execute(
+                f"SELECT * FROM memories WHERE id IN ({placeholders}) AND {user_sql}",
+                ids + list(user_params),
+            )
             rows = cur.fetchall()
     finally:
         conn.close()
@@ -295,10 +301,16 @@ def list_mem(workspace: Path, compact: bool = False, mem_type: Optional[str] = N
 
 
 def forget_mem(workspace: Path, mem_id: str) -> None:
+    user_id = _get_user_id()
+    user_sql, user_params = _user_filter(user_id)
+
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM memories WHERE id = %s", (mem_id,))
+            cur.execute(
+                f"DELETE FROM memories WHERE id = %s AND {user_sql}",
+                (mem_id,) + tuple(user_params),
+            )
             if cur.rowcount == 0:
                 print(json.dumps({"success": False, "error": "Memory item not found"}, ensure_ascii=False))
                 sys.exit(1)

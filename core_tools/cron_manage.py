@@ -110,12 +110,21 @@ def add_job(workspace, schedule: str, prompt: str, job_type: str = "cron") -> No
     print(json.dumps({"success": True, "data": {"id": job_id}}, ensure_ascii=False))
 
 
+def _ownership_filter(user_id: Optional[str]) -> tuple:
+    """Return SQL fragment and params for ownership check."""
+    if user_id:
+        return "AND (user_id = %s OR user_id IS NULL)", (user_id,)
+    return "", ()
+
+
 def remove_job(workspace, job_id: str) -> None:
     conn = None
+    user_id = _get_user_id()
+    own_sql, own_params = _ownership_filter(user_id)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM cron_jobs WHERE id = %s", (job_id,))
+            cur.execute(f"DELETE FROM cron_jobs WHERE id = %s {own_sql}", (job_id,) + own_params)
             if cur.rowcount == 0:
                 print(json.dumps({"success": False, "error": "Cron job not found"}, ensure_ascii=False))
                 sys.exit(1)
@@ -139,12 +148,14 @@ def remove_job(workspace, job_id: str) -> None:
 
 def enable_job(workspace, job_id: str, enabled: bool) -> None:
     conn = None
+    user_id = _get_user_id()
+    own_sql, own_params = _ownership_filter(user_id)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE cron_jobs SET enabled = %s WHERE id = %s",
-                (enabled, job_id),
+                f"UPDATE cron_jobs SET enabled = %s WHERE id = %s {own_sql}",
+                (enabled, job_id) + own_params,
             )
             if cur.rowcount == 0:
                 print(json.dumps({"success": False, "error": "Cron job not found"}, ensure_ascii=False))
@@ -173,6 +184,8 @@ def enable_job(workspace, job_id: str, enabled: bool) -> None:
 
 def update_job(workspace, job_id: str, schedule: Optional[str], prompt: Optional[str]) -> None:
     conn = None
+    user_id = _get_user_id()
+    own_sql, own_params = _ownership_filter(user_id)
     try:
         conn = _get_conn()
         with conn.cursor() as cur:
@@ -188,7 +201,7 @@ def update_job(workspace, job_id: str, schedule: Optional[str], prompt: Optional
                 print(json.dumps({"success": True, "data": {"id": job_id}}, ensure_ascii=False))
                 return
             vals.append(job_id)
-            cur.execute(f"UPDATE cron_jobs SET {', '.join(sets)} WHERE id = %s", vals)
+            cur.execute(f"UPDATE cron_jobs SET {', '.join(sets)} WHERE id = %s {own_sql}", vals + list(own_params))
             if cur.rowcount == 0:
                 print(json.dumps({"success": False, "error": "Cron job not found"}, ensure_ascii=False))
                 sys.exit(1)

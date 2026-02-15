@@ -198,9 +198,11 @@ def update_task(workspace: Path, args) -> None:
                 print(json.dumps({"success": False, "error": "No fields to update"}, ensure_ascii=False))
                 sys.exit(1)
 
+            user_id = _get_user_id()
+            user_sql, user_params = _user_filter(user_id)
             values.append(args.id)
-            sql = f"UPDATE tasks SET {', '.join(fields)} WHERE id = %s"
-            cur.execute(sql, values)
+            sql = f"UPDATE tasks SET {', '.join(fields)} WHERE id = %s AND {user_sql}"
+            cur.execute(sql, values + list(user_params))
             if cur.rowcount == 0:
                 print(json.dumps({"success": False, "error": "Task not found"}, ensure_ascii=False))
                 sys.exit(1)
@@ -214,11 +216,17 @@ def update_task(workspace: Path, args) -> None:
 def complete_task(workspace: Path, task_id: str) -> None:
     import psycopg2.extras
 
+    user_id = _get_user_id()
+    user_sql, user_params = _user_filter(user_id)
+
     conn = _get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # Get task first for recurrence handling
-            cur.execute("SELECT * FROM tasks WHERE id = %s", (task_id,))
+            # Get task first for recurrence handling (filtered by ownership)
+            cur.execute(
+                f"SELECT * FROM tasks WHERE id = %s AND {user_sql}",
+                [task_id] + list(user_params),
+            )
             task = cur.fetchone()
             if not task:
                 print(json.dumps({"success": False, "error": "Task not found"}, ensure_ascii=False))

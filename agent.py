@@ -102,7 +102,9 @@ def run_agent(
         working_dir = resolve_workspace()
 
     backend = get_backend(backend_name)
-    backend.gen_context(working_dir)
+    # Pass user_id from extra_env to context generation for per-user filtering
+    ctx_user_id = (extra_env or {}).get("AIDE_USER_ID")
+    backend.gen_context(working_dir, user_id=ctx_user_id)
 
     cmd = backend.build_cmd(
         prompt,

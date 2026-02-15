@@ -193,18 +193,27 @@ def _db_conn(workspace: Path):
         return None
 
 
-def _db_query_tasks(workspace: Path) -> Optional[List[Dict]]:
-    """Query open tasks from Postgres. Returns None if DB unavailable."""
+def _db_query_tasks(workspace: Path, user_id: str = None) -> Optional[List[Dict]]:
+    """Query open tasks from Postgres, filtered by user_id if provided."""
     conn = _db_conn(workspace)
     if not conn:
         return None
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT title, status, priority, due_date FROM tasks "
-                "WHERE status NOT IN ('done', 'completed') "
-                "ORDER BY created_at DESC LIMIT 20"
-            )
+            if user_id:
+                cur.execute(
+                    "SELECT title, status, priority, due_date FROM tasks "
+                    "WHERE status NOT IN ('done', 'completed') "
+                    "AND (user_id = %s OR user_id IS NULL) "
+                    "ORDER BY created_at DESC LIMIT 20",
+                    (user_id,),
+                )
+            else:
+                cur.execute(
+                    "SELECT title, status, priority, due_date FROM tasks "
+                    "WHERE status NOT IN ('done', 'completed') "
+                    "ORDER BY created_at DESC LIMIT 20"
+                )
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception:
@@ -213,17 +222,25 @@ def _db_query_tasks(workspace: Path) -> Optional[List[Dict]]:
         conn.close()
 
 
-def _db_query_cron(workspace: Path) -> Optional[List[Dict]]:
-    """Query active cron jobs from Postgres. Returns None if DB unavailable."""
+def _db_query_cron(workspace: Path, user_id: str = None) -> Optional[List[Dict]]:
+    """Query active cron jobs from Postgres, filtered by user_id if provided."""
     conn = _db_conn(workspace)
     if not conn:
         return None
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, schedule, task FROM cron_jobs "
-                "WHERE enabled = true ORDER BY id LIMIT 10"
-            )
+            if user_id:
+                cur.execute(
+                    "SELECT id, schedule, task FROM cron_jobs "
+                    "WHERE enabled = true AND (user_id = %s OR user_id IS NULL) "
+                    "ORDER BY id LIMIT 10",
+                    (user_id,),
+                )
+            else:
+                cur.execute(
+                    "SELECT id, schedule, task FROM cron_jobs "
+                    "WHERE enabled = true ORDER BY id LIMIT 10"
+                )
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception:
@@ -232,8 +249,8 @@ def _db_query_cron(workspace: Path) -> Optional[List[Dict]]:
         conn.close()
 
 
-def _generate_tasks(workspace: Path, auto_dir: Path) -> None:
-    open_tasks = _db_query_tasks(workspace)
+def _generate_tasks(workspace: Path, auto_dir: Path, user_id: str = None) -> None:
+    open_tasks = _db_query_tasks(workspace, user_id=user_id)
     if open_tasks is None:
         # Fallback to JSON
         items = _load_json(workspace / "data" / "tasks.json", [])
@@ -256,8 +273,8 @@ def _generate_tasks(workspace: Path, auto_dir: Path) -> None:
     _write_auto(auto_dir / "tasks.md", "\n".join(lines) + "\n")
 
 
-def _generate_cron(workspace: Path, auto_dir: Path) -> None:
-    active = _db_query_cron(workspace)
+def _generate_cron(workspace: Path, auto_dir: Path, user_id: str = None) -> None:
+    active = _db_query_cron(workspace, user_id=user_id)
     if active is None:
         # Fallback to JSON
         items = _load_json(workspace / "data" / "cron.json", [])
@@ -337,7 +354,7 @@ def _generate_claude_md(workspace: Path, skills_summary: str = "") -> None:
     (workspace / "CLAUDE.md").write_text("\n".join(lines), encoding="utf-8")
 
 
-def generate_auto_context(workspace: Path) -> None:
+def generate_auto_context(workspace: Path, user_id: str = None) -> None:
     """Generate CLAUDE.md and .claude/rules/auto/ files from workspace data.
 
     Called at the start of every run_agent() invocation.
@@ -349,8 +366,8 @@ def generate_auto_context(workspace: Path) -> None:
         # Skills first — summary is inlined into CLAUDE.md
         skills_summary = _generate_skills(workspace, auto_dir)
         _generate_claude_md(workspace, skills_summary)
-        _generate_tasks(workspace, auto_dir)
-        _generate_cron(workspace, auto_dir)
+        _generate_tasks(workspace, auto_dir, user_id=user_id)
+        _generate_cron(workspace, auto_dir, user_id=user_id)
         _generate_projects(workspace, auto_dir)
     except Exception:
         pass

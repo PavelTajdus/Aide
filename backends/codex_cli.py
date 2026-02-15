@@ -109,14 +109,14 @@ def build_cmd(
 # ── Context generation ───────────────────────────────────────────────────
 
 
-def gen_context(workspace: Path) -> None:
+def gen_context(workspace: Path, user_id: str = None) -> None:
     """Generate context files for Codex (AGENTS.md + Claude auto files).
 
     Generates both AGENTS.md (for Codex) and the standard .claude/rules/auto/*
     files (so switching back to Claude works without extra steps).
     """
     # Standard auto files (tasks, cron, skills, projects, CLAUDE.md)
-    generate_auto_context(workspace)
+    generate_auto_context(workspace, user_id=user_id)
 
     # Build AGENTS.md by combining all rules into one flat file
     _generate_agents_md(workspace)
