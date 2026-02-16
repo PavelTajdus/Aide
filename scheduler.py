@@ -3,7 +3,7 @@ import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -365,7 +365,11 @@ def _run_cron_jobs_db(workspace: Path, now: datetime, executor: ThreadPoolExecut
             try:
                 last_run_raw = job.get("last_run")
                 if isinstance(last_run_raw, datetime):
-                    last_run = last_run_raw.replace(tzinfo=None)
+                    # Convert UTC-aware DB timestamp to naive local time for cron comparison
+                    if last_run_raw.tzinfo is not None:
+                        last_run = last_run_raw.astimezone().replace(tzinfo=None)
+                    else:
+                        last_run = last_run_raw
                 else:
                     last_run = parse_dt(str(last_run_raw) if last_run_raw else None)
                 if not _should_run(schedule, last_run, now):
@@ -382,13 +386,14 @@ def _run_cron_jobs_db(workspace: Path, now: datetime, executor: ThreadPoolExecut
                 "slack_id": job.get("slack_id"),
             })
 
-        # Update last_run for due jobs
+        # Update last_run for due jobs (store as UTC for consistent comparison)
         if due_jobs:
+            now_utc = datetime.now(timezone.utc)
             with conn.cursor() as cur:
                 for job in due_jobs:
                     cur.execute(
                         "UPDATE cron_jobs SET last_run = %s WHERE id = %s",
-                        (now, job["id"]),
+                        (now_utc, job["id"]),
                     )
             conn.commit()
 
