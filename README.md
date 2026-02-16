@@ -1,10 +1,10 @@
 # Aide
 
-Osobní AI asistent, který běží na tvém serveru a komunikuje přes Telegram nebo Slack. Postavený nad [Claude Code CLI](https://claude.com/product/claude-code) — má přístup k souborovému systému, umí psát a spouštět kód, hledat na webu a pracovat s API. Není to chatbot. Je to pobočník, který si pamatuje, plánuje a jedná samostatně.
+AI copilot pro malé týmy, který běží na tvém serveru a komunikuje přes Slack (nebo Telegram). Postavený nad [Claude Code CLI](https://claude.com/product/claude-code) — má přístup k souborovému systému, umí psát a spouštět kód, hledat na webu a pracovat s API. Není to chatbot. Je to pobočník, který si pamatuje, plánuje a jedná samostatně. Podporuje více uživatelů se sdíleným workspace a izolovanou pamětí.
 
 ## Čím je víc než chatbot
 
-**Paměť.** Aide si automaticky ukládá důležité informace — tvoje rozhodnutí, preference, kontakty, stav projektů. Backend je SQLite s FTS5 full-text vyhledáváním. Záznamy se automaticky typují (decision, contact, preference, event, project), tagují a přiřazují k projektům. Při každé nové konverzaci si relevantní fakta sám vyhledá a použije jako kontext. Nemusíš mu nic opakovat.
+**Paměť.** Aide si automaticky ukládá důležité informace — tvoje rozhodnutí, preference, kontakty, stav projektů. Backend je PostgreSQL s pgvector — každý záznam se automaticky embeduje (Qwen3-embedding-8b) a vyhledává se hybridním algoritmem (70 % vektorová podobnost + 30 % full-text). Záznamy se automaticky typují (decision, contact, preference, event, project), tagují a přiřazují k projektům. Při každé nové konverzaci si relevantní fakta sám vyhledá a použije jako kontext. Nemusíš mu nic opakovat.
 
 **Vlastní nástroje.** Aide si umí napsat Python skripty, které pak používá jako nástroje. Potřebuješ napojení na API třetí strany? Automatické generování reportů? Zpracování dat? Řekneš mu co potřebuješ, on si napíše skript, uloží ho do workspace a od té doby ho používá.
 
@@ -22,6 +22,7 @@ Osobní AI asistent, který běží na tvém serveru a komunikuje přes Telegram
 ## Požadavky
 
 - Python 3 + pip
+- PostgreSQL 15+ s rozšířením pgvector
 - [Claude Code CLI](https://claude.com/product/claude-code) nainstalovaný a v PATH (vyžaduje předplatné)
 - Telegram bot token a/nebo Slack app tokeny
 
@@ -118,7 +119,7 @@ Workspace je oddělený od engine repa — obsahuje tvoje osobní data a nikdy n
 ├── core_tools/                   # Symlink na engine/core_tools/
 ├── tools/                        # Vlastní nástroje
 ├── knowledge/                    # Referenční dokumenty
-├── data/                         # Sessions, úkoly, paměť (memory.db + .json), cron, logy
+├── data/                         # Sessions, úkoly, cron, logy (paměť v PostgreSQL)
 ├── conversations/
 └── inbox/                        # Nahrané soubory z chatu
 ```
@@ -131,6 +132,7 @@ Engine najde workspace podle: argument skriptu > env `AIDE_WORKSPACE` > aktuáln
 
 ### Backup
 
+**Workspace** (soubory, konfigurace):
 ```bash
 cd /opt/aide/workspace
 git init
@@ -141,6 +143,13 @@ git push -u origin main
 ```
 
 Pak stačí: `./scripts/backup.sh [workspace] --push`
+
+**Databáze** (PostgreSQL dump + upload na Backblaze B2):
+```bash
+./workspace/tools/db_backup.sh
+```
+
+Skript provede `pg_dump`, uloží lokálně do `data/backups/` a pokud jsou nastavené B2 credentials v `.env`, nahraje dump na Backblaze B2. Spouští se automaticky přes systemd timer.
 
 ## Skripty
 
@@ -183,10 +192,26 @@ Pak stačí: `./scripts/backup.sh [workspace] --push`
 | `AIDE_SLACK_MAX_FILE_MB` | Max velikost příloh (default 10) |
 | `AIDE_NOTIFY_PROVIDER` | `slack` pro notifikace přes Slack |
 
+### Databáze a AI
+
+| Proměnná | Popis |
+|----------|-------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `OPENROUTER_API_KEY` | API klíč pro embeddings (Qwen3-embedding-8b) |
+
+### Backup (Backblaze B2)
+
+| Proměnná | Popis |
+|----------|-------|
+| `B2_APPLICATION_KEY_ID` | Backblaze B2 key ID |
+| `B2_APPLICATION_KEY` | Backblaze B2 application key |
+| `B2_BUCKET_NAME` | Název bucketu pro zálohy |
+
 ### Ostatní
 
 | Proměnná | Popis |
 |----------|-------|
+| `AIDE_BACKEND` | `claude-code` (default) nebo `codex` — systémový default, per-user override přes `/aide-backend` |
 | `AIDE_CLAUDE_SKIP_PERMISSIONS` | `1` = Claude Code bez potvrzování |
 | `AIDE_SCHEDULER_WORKERS` | Paralelní cron joby (default 2) |
 
@@ -201,22 +226,49 @@ Pak stačí: `./scripts/backup.sh [workspace] --push`
 
 ## Paměť
 
-Aide používá SQLite + FTS5 jako primární backend (`data/memory.db`). JSON soubor `data/memory.json` se automaticky synchronizuje jako backup.
+Aide používá PostgreSQL s pgvector jako primární backend. Každý záznam se při uložení automaticky embeduje přes Qwen3-embedding-8b (OpenRouter API) a ukládá jako vektor o 1536 dimenzích.
 
 **Strukturované záznamy.** Každý záznam má automaticky detekovaný typ (decision, contact, preference, event, project, note), tagy, entity (jména osob) a přiřazení k projektu.
 
-**FTS5 full-text vyhledávání** s prefix matching a BM25 rankingem. Filtrování podle typu a projektu.
+**Hybridní vyhledávání.** Kombinace vektorové podobnosti (cosine similarity, 70 %) a full-text search (tsvector, 30 %). Instrukční prefixy (document vs. query) zajišťují přesný retrieval i pro český jazyk.
+
+**Multi-user.** Záznamy jsou izolované podle uživatele (`user_id`). Sdílené záznamy (kontakty, rozhodnutí pro tým) se ukládají s `user_id = NULL` a jsou viditelné všem.
+
+**Noční backfill.** Cron job (3:00) automaticky dogeneruje embeddings pro záznamy, kde API volání selhalo.
 
 ```bash
 # Příkazy
-python3 core_tools/memory_manage.py add --text "..."
+python3 core_tools/memory_manage.py add --text "..." [--shared]
 python3 core_tools/memory_manage.py search --query "..." [--compact] [--type decision] [--project aide]
 python3 core_tools/memory_manage.py list [--compact] [--type ...] [--project ...]
 python3 core_tools/memory_manage.py get --ids "id1,id2"
 python3 core_tools/memory_manage.py forget --id "UUID"
 python3 core_tools/memory_manage.py stats
-python3 core_tools/memory_manage.py archive --days 30
-python3 core_tools/memory_manage.py migrate    # jednorázová migrace z JSON do SQLite
+python3 core_tools/memory_manage.py backfill   # dogeneruje chybějící embeddings
+```
+
+## Multi-user
+
+Aide podporuje více uživatelů se sdíleným workspace. Každý uživatel má vlastní paměť, úkoly a cron joby — ale sdílí nástroje, skills a knowledge base.
+
+**Správa uživatelů:**
+```bash
+python3 core_tools/user_manage.py invite --name "Jméno" --role member
+python3 core_tools/user_manage.py list
+python3 core_tools/user_manage.py deactivate --id "UUID"
+```
+
+**Role:** `admin` (plná správa) a `member` (standardní přístup). Pozvánka vygeneruje claim link — uživatel ho pošle botovi na Slacku a tím si propojí účet.
+
+**Sdílená data:** Záznamy uložené s `--shared` (paměť, úkoly) jsou viditelné všem uživatelům.
+
+**Backend per user.** Každý uživatel si může zvolit vlastní AI backend (Claude Code nebo Codex). Preference se ukládá do `users.preferences` a přebíjí systémový default (`AIDE_BACKEND`).
+
+```
+/aide-backend              # zobrazí aktuální backend
+/aide-backend claude       # přepne na Claude Code
+/aide-backend codex        # přepne na Codex
+/aide-backend reset        # vrátí na systémový default
 ```
 
 ## Slack bot — architektura
@@ -258,4 +310,6 @@ Zkontroluj status a logy:
 
 **Slack neodpovídá:** ověř `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN` a `AIDE_SLACK_ALLOWED_USERS`, zkontroluj `slack.log`.
 
-**Scheduler neposílá připomínky:** ověř `AIDE_DEFAULT_CHAT_ID`, zkontroluj `scheduler.log`.
+**Scheduler neposílá připomínky:** ověř `AIDE_DEFAULT_CHAT_ID` nebo `AIDE_SLACK_DEFAULT_TARGET`, zkontroluj `scheduler.log`.
+
+**Embeddings nefungují:** ověř `OPENROUTER_API_KEY` v `.env`. Záznamy bez embeddingu se dogenerují nočním cron jobem. Ruční backfill: `python3 core_tools/memory_manage.py backfill`.

@@ -34,8 +34,13 @@ def _get_conn():
     return conn
 
 
-def _get_user_id() -> Optional[str]:
-    return os.environ.get("AIDE_USER_ID")
+def _get_user_id() -> str:
+    """Required — multi-user mode only."""
+    uid = os.environ.get("AIDE_USER_ID")
+    if not uid:
+        print(json.dumps({"success": False, "error": "AIDE_USER_ID not set. Cannot operate without user identity."}))
+        sys.exit(1)
+    return uid
 
 
 def _iso_now() -> str:

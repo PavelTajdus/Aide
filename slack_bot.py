@@ -307,8 +307,11 @@ _USER_CACHE = _TTLCache(ttl_seconds=600, max_size=100)  # 10 min TTL
 _SLACK_NAME_CACHE = _TTLCache(ttl_seconds=3600, max_size=100)  # 1 hour TTL
 
 
-def _resolve_user(slack_user_id: str, slack_name: str = "") -> Optional[str]:
-    """Lookup or auto-create DB user from Slack user_id. Returns aide user UUID string or None."""
+def _resolve_user(slack_user_id: str, slack_name: str = "") -> Optional[Dict[str, Any]]:
+    """Lookup or auto-create DB user from Slack user_id.
+
+    Returns dict ``{"aide_user_id": ..., "backend": ...}`` or None.
+    """
     cached = _USER_CACHE.get(slack_user_id)
     if cached is not None:
         return cached
@@ -317,12 +320,14 @@ def _resolve_user(slack_user_id: str, slack_name: str = "") -> Optional[str]:
         return None
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM users WHERE slack_id = %s", (slack_user_id,))
+            cur.execute("SELECT id, preferences FROM users WHERE slack_id = %s", (slack_user_id,))
             row = cur.fetchone()
             if row:
                 uid = str(row[0])
-                _USER_CACHE.set(slack_user_id, uid)
-                return uid
+                prefs = row[1] if row[1] else {}
+                result = {"aide_user_id": uid, "backend": prefs.get("backend")}
+                _USER_CACHE.set(slack_user_id, result)
+                return result
             # Auto-create user on first contact
             import uuid
             user_id = str(uuid.uuid4())
@@ -335,8 +340,9 @@ def _resolve_user(slack_user_id: str, slack_name: str = "") -> Optional[str]:
             row = cur.fetchone()
             conn.commit()
             uid = str(row[0]) if row else user_id
-            _USER_CACHE.set(slack_user_id, uid)
-            return uid
+            result = {"aide_user_id": uid, "backend": None}
+            _USER_CACHE.set(slack_user_id, result)
+            return result
     except Exception:
         return None
     finally:
@@ -488,7 +494,7 @@ def _resolve_workspace(default_workspace: Path, user_context: Optional[Dict[str,
 
     # Auto-initialize workspace for new user
     try:
-        _init_user_workspace(user_ws, default_workspace)
+        _init_user_workspace(user_ws, default_workspace, user_id=user_id)
         return user_ws
     except Exception:
         # Clean up partial init
@@ -501,7 +507,7 @@ _INIT_LOCKS: Dict[str, threading.Lock] = {}
 _INIT_LOCKS_LOCK = threading.Lock()
 
 
-def _init_user_workspace(user_ws: Path, template_ws: Path) -> None:
+def _init_user_workspace(user_ws: Path, template_ws: Path, *, user_id: Optional[str] = None) -> None:
     """Initialize a new user workspace from the default template.
 
     Thread-safe: uses per-user lock to prevent concurrent init.
@@ -541,14 +547,22 @@ def _init_user_workspace(user_ws: Path, template_ws: Path) -> None:
         if update_sh.exists():
             subprocess.run([str(update_sh), str(user_ws)], timeout=30, capture_output=True)
 
-        # Symlink .env from template (tools use load_dotenv() from cwd)
-        env_src = template_ws / ".env"
+        # Create user-specific .env with workspace paths (NOT symlinked from template)
         env_dst = user_ws / ".env"
-        if env_src.exists():
-            try:
-                env_dst.symlink_to(env_src)
-            except FileExistsError:
-                pass
+        if not env_dst.exists():
+            db_url = os.environ.get("DATABASE_URL", "")
+            slack_bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
+            env_lines = [
+                f"AIDE_WORKSPACE={user_ws}",
+                f"AIDE_ENGINE={os.environ.get('AIDE_ENGINE', '/opt/aide/engine')}",
+            ]
+            if db_url:
+                env_lines.append(f"DATABASE_URL={db_url}")
+            # Shared infra keys needed for notifications
+            env_lines.append("AIDE_NOTIFY_PROVIDER=slack")
+            if slack_bot_token:
+                env_lines.append(f"SLACK_BOT_TOKEN={slack_bot_token}")
+            env_dst.write_text("\n".join(env_lines) + "\n")
 
         # Copy user-specific files that should be customizable
         for fname in ["CLAUDE.md"]:
@@ -556,6 +570,25 @@ def _init_user_workspace(user_ws: Path, template_ws: Path) -> None:
             dst = user_ws / fname
             if src.exists() and not dst.exists():
                 shutil.copy2(str(src), str(dst))
+
+        # Create default heartbeat cron job for the new user
+        if user_id:
+            try:
+                engine_dir = Path(os.environ.get("AIDE_ENGINE", "/opt/aide/engine"))
+                cron_tool = engine_dir / "core_tools" / "cron_manage.py"
+                env = os.environ.copy()
+                env["AIDE_USER_ID"] = user_id
+                subprocess.run(
+                    [
+                        "python3", str(cron_tool), "add",
+                        "--schedule", "*/30 * * * *",
+                        "--prompt", "Heartbeat check. Review overdue tasks and upcoming deadlines. Be concise.",
+                        "--type", "heartbeat",
+                    ],
+                    env=env, timeout=10, capture_output=True,
+                )
+            except Exception:
+                pass  # Non-critical, don't block workspace init
 
         # Mark as successfully initialized
         sentinel.write_text(datetime.now().isoformat())
@@ -1253,6 +1286,9 @@ def _process_message(
         if user_context.get("slack_user_id"):
             agent_extra_env["AIDE_SLACK_USER_ID"] = user_context["slack_user_id"]
 
+    # Per-user backend override (from user preferences)
+    user_backend = (user_context or {}).get("backend") if user_context else None
+
     try:
         answer, new_session_id, _tool_log = run_agent(
             prompt,
@@ -1261,6 +1297,7 @@ def _process_message(
             process_cb=_process_cb,
             tool_cb=_tool_cb,
             backend_options=session_options,
+            backend_name=user_backend,
             extra_env=agent_extra_env,
         )
     except Exception as exc:
@@ -1382,7 +1419,9 @@ def _handle_event(
 
     # Resolve user identity (Slack → DB)
     slack_name = _get_slack_user_name(client, user_id) if user_id else ""
-    aide_user_id = _resolve_user(user_id, slack_name) if user_id else None
+    user_info = _resolve_user(user_id, slack_name) if user_id else None
+    aide_user_id = user_info["aide_user_id"] if user_info else None
+    user_backend = (user_info or {}).get("backend")
 
     # Resolve channel scope (fall back to shared if user identity unavailable)
     routing = _resolve_channel_scope(channel_id, channel_type, aide_user_id)
@@ -1393,6 +1432,7 @@ def _handle_event(
         "slack_user_id": user_id,
         "scope": routing["scope"],
         "channel_via": routing["via"],
+        "backend": user_backend,
     }
 
     cleaned = _strip_mention(text, bot_user_id)
@@ -1457,7 +1497,8 @@ def main() -> None:
     def _resolve_cmd_workspace(user_id: Optional[str], channel_id: str, channel_type: str = "channel") -> Path:
         """Resolve workspace for slash commands and auto-thread checks."""
         slack_name = _get_slack_user_name(client, user_id) if user_id else ""
-        aide_user_id = _resolve_user(user_id, slack_name) if user_id else None
+        user_info = _resolve_user(user_id, slack_name) if user_id else None
+        aide_user_id = user_info["aide_user_id"] if user_info else None
         routing = _resolve_channel_scope(channel_id, channel_type, aide_user_id)
         if not aide_user_id and routing["scope"] == "private":
             routing = {"scope": "shared", "owner_id": None, "via": "default"}
@@ -1805,6 +1846,69 @@ def main() -> None:
 
         _post_message(client, channel_id, "\n".join(lines))
 
+    # ── Per-user backend switching ─────────────────────────────────────
+
+    @app.command("/aide-backend")
+    def handle_backend_command(ack, body, logger):
+        """Switch AI backend. Usage: /aide-backend [claude|codex|reset]"""
+        ack()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not _is_allowed(user_id, allowed):
+            return
+
+        slack_name = _get_slack_user_name(client, user_id) if user_id else ""
+        user_info = _resolve_user(user_id, slack_name) if user_id else None
+        aide_user_id = user_info["aide_user_id"] if user_info else None
+        if not aide_user_id:
+            _post_message(client, channel_id, "User not found.")
+            return
+
+        text = str(body.get("text", "")).strip().lower()
+        valid_backends = {"claude", "claude-code", "codex", "codex-cli", "openai"}
+
+        if not text:
+            current = (user_info or {}).get("backend") or os.environ.get("AIDE_BACKEND", "claude-code")
+            _post_message(client, channel_id,
+                          f"Current backend: *{current}*\nUsage: `/aide-backend claude` or `/aide-backend codex` or `/aide-backend reset`")
+            return
+
+        conn = _db_conn()
+        if not conn:
+            _post_message(client, channel_id, "DB not available.")
+            return
+
+        try:
+            if text == "reset":
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE users SET preferences = preferences - 'backend' WHERE id = %s",
+                        (aide_user_id,),
+                    )
+                conn.commit()
+                _USER_CACHE.delete(user_id)
+                default = os.environ.get("AIDE_BACKEND", "claude-code")
+                _post_message(client, channel_id, f"Backend reset to system default (*{default}*).")
+            elif text in valid_backends:
+                # Normalize
+                backend_val = "claude-code" if text in ("claude", "claude-code") else "codex"
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE users SET preferences = COALESCE(preferences, '{}'::jsonb) || %s::jsonb
+                           WHERE id = %s""",
+                        (json.dumps({"backend": backend_val}), aide_user_id),
+                    )
+                conn.commit()
+                _USER_CACHE.delete(user_id)
+                _post_message(client, channel_id, f"Backend switched to *{backend_val}*. New threads will use this backend.")
+            else:
+                _post_message(client, channel_id,
+                              f"Unknown backend: `{text}`. Use `claude`, `codex`, or `reset`.")
+        except Exception as exc:
+            _post_message(client, channel_id, f"Error: {exc}")
+        finally:
+            _db_return(conn)
+
     # ── Admin commands ──────────────────────────────────────────────────
 
     @app.command("/aide-invite")
@@ -1817,7 +1921,8 @@ def main() -> None:
             return
 
         slack_name = _get_slack_user_name(client, user_id) if user_id else ""
-        aide_user_id = _resolve_user(user_id, slack_name) if user_id else None
+        user_info = _resolve_user(user_id, slack_name) if user_id else None
+        aide_user_id = user_info["aide_user_id"] if user_info else None
         if not aide_user_id or not _is_admin(aide_user_id):
             _post_message(client, channel_id, "Permission denied: admin only.")
             return
@@ -1885,7 +1990,8 @@ def main() -> None:
             return
 
         slack_name = _get_slack_user_name(client, user_id) if user_id else ""
-        aide_user_id = _resolve_user(user_id, slack_name) if user_id else None
+        user_info = _resolve_user(user_id, slack_name) if user_id else None
+        aide_user_id = user_info["aide_user_id"] if user_info else None
         if not aide_user_id or not _is_admin(aide_user_id):
             _post_message(client, channel_id, "Permission denied: admin only.")
             return
@@ -1928,7 +2034,8 @@ def main() -> None:
             return
 
         slack_name = _get_slack_user_name(client, user_id) if user_id else ""
-        aide_user_id = _resolve_user(user_id, slack_name) if user_id else None
+        user_info = _resolve_user(user_id, slack_name) if user_id else None
+        aide_user_id = user_info["aide_user_id"] if user_info else None
         if not aide_user_id or not _is_admin(aide_user_id):
             _post_message(client, channel_id, "Permission denied: admin only.")
             return

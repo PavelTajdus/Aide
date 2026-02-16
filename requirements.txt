@@ -1,6 +1,36 @@
+# Core
 python-telegram-bot==20.7
 python-dotenv==1.0.1
 croniter==2.0.5
+psycopg2-binary==2.9.11
+
+# Slack
 slack-bolt==1.20.0
 slack-sdk==3.27.1
 markdown-to-mrkdwn==0.3.1
+
+# HTTP & APIs
+requests==2.32.5
+httpx==0.25.2
+openai==2.17.0
+
+# Social
+tweepy==4.16.0
+
+# Backup
+b2==4.5.1
+
+# Media
+playwright==1.58.0
+pytubefix==10.3.6
+yt-dlp==2026.2.4
+youtube-transcript-api==1.2.4
+
+# Google
+google-api-python-client==2.189.0
+google-auth-oauthlib==1.2.4
+google-auth-httplib2==0.3.0
+
+# Utils
+openpyxl==3.1.5
+groq==1.0.0

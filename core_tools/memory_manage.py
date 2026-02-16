@@ -11,6 +11,50 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _utils import resolve_workspace
 
+# --- Embedding ---
+
+EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"
+EMBEDDING_DIMENSIONS = 1536
+EMBEDDING_API_URL = "https://openrouter.ai/api/v1/embeddings"
+
+
+INSTRUCTION_QUERY = "Represent this query for retrieving relevant documents: "
+INSTRUCTION_DOC = "Represent this document for retrieval: "
+
+
+def _get_embedding(text: str, mode: str = "document") -> Optional[List[float]]:
+    """Generate embedding via OpenRouter (Qwen3). Returns None on failure.
+
+    mode: "document" for storing, "query" for searching.
+    """
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        return None
+    prefix = INSTRUCTION_QUERY if mode == "query" else INSTRUCTION_DOC
+    prefixed = prefix + text[:8000]
+    try:
+        import httpx
+        resp = httpx.post(
+            EMBEDDING_API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": EMBEDDING_MODEL,
+                "input": prefixed,
+                "dimensions": EMBEDDING_DIMENSIONS,
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data["data"][0]["embedding"]
+    except Exception:
+        pass
+    return None
+
+
 # --- Database connection ---
 
 _DB_URL = None
@@ -32,9 +76,13 @@ def _get_conn():
     return conn
 
 
-def _get_user_id() -> Optional[str]:
-    """Get current user_id from env. None = legacy/single-user mode."""
-    return os.environ.get("AIDE_USER_ID")
+def _get_user_id() -> str:
+    """Get current user_id from env. Required — multi-user mode only."""
+    uid = os.environ.get("AIDE_USER_ID")
+    if not uid:
+        print(json.dumps({"success": False, "error": "AIDE_USER_ID not set. Cannot operate without user identity."}))
+        sys.exit(1)
+    return uid
 
 
 # --- Type detection heuristics ---
@@ -171,14 +219,16 @@ def add_mem(workspace: Path, text: str, mem_type: Optional[str] = None,
     detected_project = project or _detect_project(text)
     user_id = None if shared else _get_user_id()
 
+    embedding = _get_embedding(text)
+
     conn = _get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                """INSERT INTO memories (id, user_id, text, type, tags, entities, project)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO memories (id, user_id, text, type, tags, entities, project, embedding)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
                 (mem_id, user_id, text, detected_type, detected_tags,
-                 detected_entities, detected_project),
+                 detected_entities, detected_project, embedding),
             )
         conn.commit()
     finally:
@@ -199,36 +249,90 @@ def search_mem(workspace: Path, query: str, compact: bool = False,
     user_id = _get_user_id()
     user_sql, user_params = _user_filter(user_id)
 
+    query_embedding = _get_embedding(query, mode="query")
+
     conn = _get_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            raw_words = query.strip().split()
-            sanitized = [re.sub(r'[^\w]', '', w) for w in raw_words]
-            sanitized = [w for w in sanitized if w]
-            if sanitized:
-                tsquery_parts = [f"{w}:*" for w in sanitized]
-                tsquery = " & ".join(tsquery_parts)
-                sql = f"""
-                    SELECT *, ts_rank(tsv, to_tsquery('simple', %s)) AS rank
-                    FROM memories
-                    WHERE tsv @@ to_tsquery('simple', %s) AND {user_sql}
-                """
-                params = [tsquery, tsquery] + user_params
-                order = " ORDER BY rank DESC LIMIT %s"
-            else:
-                sql = f"SELECT *, 0 AS rank FROM memories WHERE {user_sql}"
-                params = list(user_params)
-                order = " ORDER BY created_at DESC LIMIT %s"
-
+            # Build filter clauses
+            filters = [user_sql]
+            filter_params = list(user_params)
             if mem_type:
-                sql += " AND type = %s"
-                params.append(mem_type)
+                filters.append("type = %s")
+                filter_params.append(mem_type)
             if project:
-                sql += " AND project = %s"
-                params.append(project)
+                filters.append("project = %s")
+                filter_params.append(project)
+            where = " AND ".join(filters)
 
-            sql += order
-            params.append(limit)
+            if query_embedding:
+                # Hybrid search: cosine similarity + full-text, combined rank
+                raw_words = query.strip().split()
+                sanitized = [re.sub(r'[^\w]', '', w) for w in raw_words]
+                sanitized = [w for w in sanitized if w]
+
+                if sanitized:
+                    tsquery_parts = [f"{w}:*" for w in sanitized]
+                    tsquery = " & ".join(tsquery_parts)
+                    sql = f"""
+                        SELECT *,
+                            CASE WHEN embedding IS NOT NULL
+                                 THEN 1 - (embedding <=> %s::vector)
+                                 ELSE 0 END AS vec_score,
+                            CASE WHEN tsv @@ to_tsquery('simple', %s)
+                                 THEN ts_rank(tsv, to_tsquery('simple', %s))
+                                 ELSE 0 END AS ts_score
+                        FROM memories
+                        WHERE {where}
+                        ORDER BY (
+                            COALESCE(CASE WHEN embedding IS NOT NULL
+                                          THEN 1 - (embedding <=> %s::vector)
+                                          ELSE 0 END, 0) * 0.7
+                            + COALESCE(CASE WHEN tsv @@ to_tsquery('simple', %s)
+                                            THEN ts_rank(tsv, to_tsquery('simple', %s))
+                                            ELSE 0 END, 0) * 0.3
+                        ) DESC
+                        LIMIT %s
+                    """
+                    emb_str = str(query_embedding)
+                    params = [emb_str, tsquery, tsquery] + filter_params + [emb_str, tsquery, tsquery, limit]
+                else:
+                    sql = f"""
+                        SELECT *,
+                            CASE WHEN embedding IS NOT NULL
+                                 THEN 1 - (embedding <=> %s::vector)
+                                 ELSE 0 END AS vec_score,
+                            0 AS ts_score
+                        FROM memories
+                        WHERE {where}
+                        ORDER BY CASE WHEN embedding IS NOT NULL
+                                      THEN embedding <=> %s::vector
+                                      ELSE 999 END ASC
+                        LIMIT %s
+                    """
+                    emb_str = str(query_embedding)
+                    params = [emb_str] + filter_params + [emb_str, limit]
+            else:
+                # Fallback: full-text only (no API key or embedding failed)
+                raw_words = query.strip().split()
+                sanitized = [re.sub(r'[^\w]', '', w) for w in raw_words]
+                sanitized = [w for w in sanitized if w]
+                if sanitized:
+                    tsquery_parts = [f"{w}:*" for w in sanitized]
+                    tsquery = " & ".join(tsquery_parts)
+                    sql = f"""
+                        SELECT *, ts_rank(tsv, to_tsquery('simple', %s)) AS rank
+                        FROM memories
+                        WHERE tsv @@ to_tsquery('simple', %s) AND {where}
+                    """
+                    params = [tsquery, tsquery] + filter_params
+                    sql += " ORDER BY rank DESC LIMIT %s"
+                    params.append(limit)
+                else:
+                    sql = f"SELECT *, 0 AS rank FROM memories WHERE {where}"
+                    params = list(filter_params)
+                    sql += " ORDER BY created_at DESC LIMIT %s"
+                    params.append(limit)
 
             cur.execute(sql, params)
             rows = cur.fetchall()
@@ -328,6 +432,44 @@ def forget_mem(workspace: Path, mem_id: str) -> None:
     print(json.dumps({"success": True, "data": {"id": mem_id}}, ensure_ascii=False))
 
 
+def backfill_embeddings(workspace: Path) -> None:
+    """Generate embeddings for all memories that don't have one yet."""
+    import psycopg2.extras
+    import time
+
+    conn = _get_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT id, text FROM memories WHERE embedding IS NULL ORDER BY created_at")
+            rows = cur.fetchall()
+
+        total = len(rows)
+        done = 0
+        failed = 0
+
+        for row in rows:
+            emb = _get_embedding(row["text"])
+            if emb:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE memories SET embedding = %s WHERE id = %s",
+                        (emb, str(row["id"])),
+                    )
+                conn.commit()
+                done += 1
+            else:
+                failed += 1
+            # Rate limit: ~50ms between calls
+            time.sleep(0.05)
+
+        print(json.dumps({
+            "success": True,
+            "data": {"total": total, "embedded": done, "failed": failed}
+        }, ensure_ascii=False))
+    finally:
+        conn.close()
+
+
 def stats_mem(workspace: Path) -> None:
     import psycopg2.extras
 
@@ -395,6 +537,7 @@ def main() -> None:
     forget_p.add_argument("--id", required=True)
 
     sub.add_parser("stats")
+    sub.add_parser("backfill", help="Generate embeddings for memories that don't have one")
 
     args = parser.parse_args()
     workspace = resolve_workspace()
@@ -416,6 +559,8 @@ def main() -> None:
             forget_mem(workspace, args.id)
         elif args.cmd == "stats":
             stats_mem(workspace)
+        elif args.cmd == "backfill":
+            backfill_embeddings(workspace)
     except Exception as exc:
         print(json.dumps({"success": False, "error": str(exc)}))
         sys.exit(1)
