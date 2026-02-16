@@ -4,6 +4,7 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 
 WORKSPACE=$(resolve_workspace "${1:-}")
+setup_git_auth "$WORKSPACE"
 
 echo "=== Aide deploy ==="
 echo "Engine:    $ENGINE_DIR"

@@ -9,6 +9,21 @@ _AIDE_COMMON_LOADED=1
 ENGINE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 PYTHON_BIN=${PYTHON_BIN:-python3}
 
+setup_git_auth () {
+  # Load GITHUB_TOKEN from workspace .env and configure GIT_ASKPASS.
+  # Call after resolving workspace path.
+  local ws=${1:-}
+  [[ -z "$ws" ]] && return 0
+  local env_file="$ws/.env"
+  [[ -f "$env_file" ]] || return 0
+  local token
+  token=$(grep -E "^GITHUB_TOKEN=" "$env_file" | head -1 | cut -d= -f2- || true)
+  if [[ -n "$token" ]]; then
+    export GITHUB_TOKEN="$token"
+    export GIT_ASKPASS="$ENGINE_DIR/scripts/git-askpass.sh"
+  fi
+}
+
 resolve_workspace () {
   local arg=${1:-}
 

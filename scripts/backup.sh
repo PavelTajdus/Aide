@@ -4,6 +4,7 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 
 WORKSPACE=$(resolve_workspace "${1:-}")
+setup_git_auth "$WORKSPACE"
 
 if [[ ! -d "$WORKSPACE" ]]; then
   echo "Workspace not found: $WORKSPACE" >&2
