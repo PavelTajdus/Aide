@@ -1780,7 +1780,7 @@ def main() -> None:
         hb_label = "*Heartbeat:* no data"
         try:
             user_info = _resolve_user(user_id)
-            db_user_id = user_info["id"] if user_info else None
+            db_user_id = user_info["aide_user_id"] if user_info else None
             if db_user_id:
                 conn = _db_conn()
                 if conn:
