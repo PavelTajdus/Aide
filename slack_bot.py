@@ -1776,27 +1776,37 @@ def main() -> None:
             svc_statuses.append(f"{short}: {icon}")
         lines.append(f"*Services:* {', '.join(svc_statuses)}")
 
-        # 2. Last heartbeat
-        hb_path = workspace / "data" / "last_heartbeat.json"
+        # 2. Last heartbeat (from DB cron_jobs.last_run)
+        hb_label = "*Heartbeat:* no data"
         try:
-            with open(hb_path) as f:
-                hb = json.load(f)
-            sent_at = hb.get("sent_at", "")
-            if sent_at:
-                hb_time = datetime.fromisoformat(sent_at)
-                if hb_time.tzinfo is None:
-                    hb_time = hb_time.replace(tzinfo=timezone.utc)
-                ago = datetime.now(timezone.utc) - hb_time
-                mins = int(ago.total_seconds() // 60)
-                if mins < 60:
-                    lines.append(f"*Heartbeat:* pred {mins} min")
-                else:
-                    hours = mins // 60
-                    lines.append(f"*Heartbeat:* pred {hours} hod")
-            else:
-                lines.append("*Heartbeat:* no data")
+            user_info = _resolve_user(user_id)
+            db_user_id = user_info["id"] if user_info else None
+            if db_user_id:
+                conn = _db_conn()
+                if conn:
+                    try:
+                        cur = conn.cursor()
+                        cur.execute(
+                            "SELECT last_run FROM cron_jobs WHERE user_id = %s AND type = 'heartbeat' AND enabled = true ORDER BY last_run DESC NULLS LAST LIMIT 1",
+                            (db_user_id,),
+                        )
+                        row = cur.fetchone()
+                        if row and row[0]:
+                            hb_time = row[0]
+                            if hb_time.tzinfo is None:
+                                hb_time = hb_time.replace(tzinfo=timezone.utc)
+                            ago = datetime.now(timezone.utc) - hb_time
+                            mins = int(ago.total_seconds() // 60)
+                            if mins < 60:
+                                hb_label = f"*Heartbeat:* pred {mins} min"
+                            else:
+                                hours = mins // 60
+                                hb_label = f"*Heartbeat:* pred {hours} hod"
+                    finally:
+                        _db_return(conn)
         except Exception:
-            lines.append("*Heartbeat:* no data")
+            pass
+        lines.append(hb_label)
 
         # 3. Running agents (what's Aide doing right now?)
         now = time.time()
