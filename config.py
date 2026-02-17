@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -366,6 +367,8 @@ def generate_auto_context(workspace: Path, user_id: str = None) -> None:
         # Skills first — summary is inlined into CLAUDE.md
         skills_summary = _generate_skills(workspace, auto_dir)
         _generate_claude_md(workspace, skills_summary)
+        now = datetime.now()
+        _write_auto(auto_dir / "datetime.md", f"# Current date and time\n\nToday is {now.strftime('%d. %m. %Y')}, {now.strftime('%H:%M')}.\n")
         _generate_tasks(workspace, auto_dir, user_id=user_id)
         _generate_cron(workspace, auto_dir, user_id=user_id)
         _generate_projects(workspace, auto_dir)
