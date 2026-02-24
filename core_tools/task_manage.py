@@ -223,8 +223,12 @@ def update_task(workspace: Path, args) -> None:
                 "recurrence": args.recurrence,
                 "assignee_id": assignee_id,
             }
+            # Clearable fields: empty string means "set to NULL"
+            _clearable = {"due_date", "remind_at", "recurrence"}
             for col, val in field_map.items():
-                if val is not None:
+                if col in _clearable and getattr(args, {"due_date": "due", "remind_at": "remind", "recurrence": "recurrence"}[col], None) == "":
+                    fields.append(f"{col} = NULL")
+                elif val is not None:
                     fields.append(f"{col} = %s")
                     values.append(val)
 

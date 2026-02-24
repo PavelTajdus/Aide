@@ -16,6 +16,14 @@
 3. To list existing jobs: `python $AIDE_ENGINE/core_tools/cron_manage.py list`
 4. To remove: `python $AIDE_ENGINE/core_tools/cron_manage.py remove --id "UUID"`
 
+## Job types
+- `cron` (default) — runs prompt through LLM agent, sends result to Slack
+- `script` — runs shell command directly, NO LLM, NO Slack notification. Use for data fetches, backups, etc.
+- `heartbeat` — special type for periodic task/deadline checks
+
+For silent script execution:
+`python $AIDE_ENGINE/core_tools/cron_manage.py add --schedule "CRON_EXPR" --type script --prompt "command to run"`
+
 ## One-time reminders
 For "remind me in X minutes/hours" or "remind me at HH:MM":
 1. Calculate the exact target time.

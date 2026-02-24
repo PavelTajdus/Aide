@@ -7,6 +7,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
+load_dotenv()
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _utils import resolve_workspace

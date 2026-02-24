@@ -244,7 +244,7 @@ def main() -> None:
     add_p = sub.add_parser("add")
     add_p.add_argument("--schedule", required=True)
     add_p.add_argument("--prompt", required=True)
-    add_p.add_argument("--type", default="cron", choices=["cron", "heartbeat"])
+    add_p.add_argument("--type", default="cron", choices=["cron", "heartbeat", "script"])
 
     rm_p = sub.add_parser("remove")
     rm_p.add_argument("--id", required=True)

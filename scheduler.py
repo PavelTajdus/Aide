@@ -328,6 +328,16 @@ def _execute_cron_job(
         if job_type == "heartbeat" or job_id == "heartbeat":
             _execute_heartbeat_job(workspace, slack_user_id=slack_user_id, user_id=user_id)
             return
+        if job_type == "script":
+            import subprocess
+            result = subprocess.run(
+                prompt, shell=True, cwd=str(workspace),
+                capture_output=True, text=True, timeout=300,
+            )
+            _log_line(workspace, f"Script job {job_id}: exit={result.returncode}")
+            if result.returncode != 0:
+                _log_line(workspace, f"Script job {job_id} stderr: {result.stderr[:500]}")
+            return
         answer, _sid, _tool_log = run_agent(prompt, working_dir=workspace)
         send_message(answer, chat_id=slack_user_id)
     except Exception as exc:
